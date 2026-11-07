@@ -1,0 +1,20 @@
+# Rust
+target/
+Cargo.lock.bak
+
+# Keys / credentials (NEVER commit)
+*.json.key
+key*.json
+~/.near-credentials/
+.near-credentials/
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
