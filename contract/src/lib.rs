@@ -1,11 +1,33 @@
 //! Gate-1 registered run logs with creator-funded participation stakes.
-//! Unchallenged F1 claims can finalize after their window. Challenge handling,
-//! adjudication and participation-stake release are not implemented in this slice.
+//! Challenged direct T2 tasks have compute-only causal verification. Persisting
+//! adjudication and releasing participation stakes are later work items.
+
+pub mod t2;
 
 use near_sdk::{
-    AccountId, NearToken, PanicOnDefault, Promise, env, json_types::U128, near, store::LookupMap,
+    AccountId, NearToken, PanicOnDefault, Promise, PublicKey, env,
+    json_types::{Base64VecU8, U128},
+    near,
+    store::LookupMap,
 };
 use std::collections::BTreeSet;
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct Parameters {
+    stake: U128,
+    blame_bond: U128,
+    challenge_bond: U128,
+}
+
+/// Identity pins supplied by the creator; hashes do not verify execution.
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct VerifierPin {
+    task_spec_hash: String,
+    verifier_hash: String,
+    verifier_key: Option<PublicKey>,
+}
 
 #[near(serializers = [json, borsh])]
 #[derive(Clone)]
@@ -16,6 +38,7 @@ pub struct LogEvent {
     pub payload_hash: String,
     pub prev_hash: String,
     pub block_height: u64,
+    pub task: Option<t2::TaskLink>,
 }
 
 #[near(serializers = [json, borsh])]
@@ -29,22 +52,28 @@ pub struct AgentStake {
 #[derive(Clone)]
 pub struct RunLog {
     creator: AccountId,
+    verifier: VerifierPin,
     agents: Vec<AgentStake>,
     events: Vec<LogEvent>,
     head_hash: String,
 }
 
-/// The Gate-1 slice admits only F1. Other classes arrive with their verifiers.
+/// Checkable failure classes; verifier dispatch is implemented separately.
 #[near(serializers = [json, borsh])]
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum FailureClass {
     F1,
+    F2,
+    F3,
+    F4,
+    F5a,
 }
 
 #[near(serializers = [json, borsh])]
 #[derive(Clone)]
 pub enum ClaimStatus {
     Pending,
+    Challenged,
     Finalized,
 }
 
@@ -65,11 +94,17 @@ pub struct Claim {
     status: ClaimStatus,
     challenger: Option<AccountId>,
     corrected_attribution: Option<AccountId>,
+    challenge_bond: U128,
+    verifier_hash: String,
+    assignment_seq: Option<u64>,
+    evidence_snapshot: Option<t2::EvidenceSnapshot>,
 }
 
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct LogAnchor {
+    owner: AccountId,
+    parameters: Parameters,
     runs: LookupMap<String, RunLog>,
     claims: LookupMap<u64, Claim>,
     next_claim_id: u64,
@@ -83,6 +118,12 @@ impl LogAnchor {
     #[init]
     pub fn new(demo: Option<bool>) -> Self {
         Self {
+            owner: env::predecessor_account_id(),
+            parameters: Parameters {
+                stake: U128(NearToken::from_near(1).as_yoctonear()),
+                blame_bond: U128(NearToken::from_millinear(250).as_yoctonear()),
+                challenge_bond: U128(NearToken::from_millinear(250).as_yoctonear()),
+            },
             runs: LookupMap::new(b"r"),
             claims: LookupMap::new(b"c"),
             next_claim_id: 0,
@@ -95,15 +136,36 @@ impl LogAnchor {
     /// Register unique agents and fund 1 NEAR of participation stake for each.
     /// The run creator supplies all stakes plus measured registration storage.
     /// Only excess deposit is refunded here; stake release is a later method.
-    /// Task/verifier pinning is deferred to its dedicated work item (2.4).
+    /// The embedded T2 mode requires the pinned spec bytes for admission.
     #[payable]
-    pub fn register(&mut self, run_id: String, agents: Vec<AccountId>) {
+    pub fn register(
+        &mut self,
+        run_id: String,
+        agents: Vec<AccountId>,
+        verifier: VerifierPin,
+        task_spec: Option<Base64VecU8>,
+    ) {
+        assert!(
+            is_hash(&verifier.task_spec_hash) && is_hash(&verifier.verifier_hash),
+            "invalid verifier pin"
+        );
+        if verifier.verifier_hash == t2::implementation_hash() {
+            let spec = task_spec
+                .as_ref()
+                .expect("embedded verifier requires task spec");
+            assert_eq!(
+                hex::encode(env::sha256(&spec.0)),
+                verifier.task_spec_hash,
+                "task spec hash mismatch"
+            );
+            t2::parse_spec(&spec.0).unwrap_or_else(|error| env::panic_str(error));
+        }
         assert!(!run_id.is_empty(), "run_id must not be empty");
         assert!(!self.runs.contains_key(&run_id), "run already registered");
         assert!(!agents.is_empty(), "agents must not be empty");
         let unique: BTreeSet<_> = agents.iter().collect();
         assert_eq!(unique.len(), agents.len(), "agents must be unique");
-        let stake = NearToken::from_near(1).as_yoctonear();
+        let stake = self.parameters.stake.0;
         let total_stake = stake
             .checked_mul(agents.len() as u128)
             .expect("stake overflow");
@@ -121,6 +183,7 @@ impl LogAnchor {
             run_id,
             RunLog {
                 creator: env::predecessor_account_id(),
+                verifier,
                 agents: agents
                     .into_iter()
                     .map(|account_id| AgentStake {
@@ -162,6 +225,7 @@ impl LogAnchor {
         kind: String,
         payload_hash: String,
         prev_hash: String,
+        task: Option<t2::TaskLink>,
     ) -> String {
         assert!(!run_id.is_empty(), "run_id must not be empty");
         assert!(!kind.is_empty(), "kind must not be empty");
@@ -178,6 +242,53 @@ impl LogAnchor {
         );
         assert_eq!(seq, log.events.len() as u64, "seq must extend the log");
         assert_eq!(prev_hash, log.head_hash, "prev_hash must equal head");
+        if log.verifier.verifier_hash == t2::implementation_hash() {
+            assert!(
+                log.events.len() < t2::MAX_EVENTS,
+                "embedded verifier event limit reached"
+            );
+            match kind.as_str() {
+                "task_assigned" => {
+                    let link = task.as_ref().expect("assignment requires task binding");
+                    assert_eq!(
+                        link.assignment_seq, seq,
+                        "assignment must bind its own sequence"
+                    );
+                    assert!(
+                        link.parent_assignment_seq.is_none(),
+                        "nested T2 delegation is unsupported"
+                    );
+                    assert!(
+                        log.agents
+                            .iter()
+                            .any(|agent| agent.account_id == link.worker),
+                        "worker must be registered agent"
+                    );
+                }
+                "settlement" => {
+                    let link = task.as_ref().expect("completion requires task binding");
+                    let index = usize::try_from(link.assignment_seq)
+                        .expect("assignment sequence out of range");
+                    let assigned = log.events.get(index).expect("unknown assignment");
+                    assert_eq!(assigned.kind, "task_assigned", "not an assignment");
+                    assert!(
+                        assigned.task.as_ref() == Some(link),
+                        "completion task binding mismatch"
+                    );
+                    assert_eq!(actor, link.worker, "only assigned worker may complete");
+                    assert!(
+                        !log.events
+                            .iter()
+                            .any(|event| event.kind == "settlement"
+                                && event.task.as_ref() == Some(link)),
+                        "assignment already completed"
+                    );
+                }
+                _ => assert!(task.is_none(), "unsupported task event kind"),
+            }
+        } else {
+            assert!(task.is_none(), "task binding requires supported verifier");
+        }
 
         let event = LogEvent {
             seq,
@@ -186,6 +297,7 @@ impl LogAnchor {
             payload_hash,
             prev_hash,
             block_height: env::block_height(),
+            task,
         };
         let head = event_hash(&event);
         let log = self.runs.get_mut(&run_id).expect("unknown run");
@@ -235,7 +347,7 @@ impl LogAnchor {
         self.runs.get(&run_id).cloned()
     }
 
-    /// File a pending F1 claim with a 0.25 NEAR bond plus storage deposit.
+    /// File a pending claim with the current bond plus storage deposit.
     /// Evidence hashes are lowercase SHA-256 hex, matching the anchor ABI.
     /// Historical transaction linkage and blame correctness are not verified
     /// here: transaction hashes are references, checked only for base58 format.
@@ -245,11 +357,16 @@ impl LogAnchor {
         run_id: String,
         blamed: AccountId,
         failure_class: FailureClass,
+        verifier_hash: String,
         evidence_seqs: Vec<u64>,
         evidence_payload_hashes: Vec<String>,
         evidence_tx_hashes: Vec<String>,
     ) -> u64 {
         let log = self.runs.get(&run_id).expect("unknown run");
+        assert_eq!(
+            verifier_hash, log.verifier.verifier_hash,
+            "verifier hash mismatch"
+        );
         assert!(
             log.agents.iter().any(|agent| agent.account_id == blamed),
             "blamed must be registered agent"
@@ -291,7 +408,32 @@ impl LogAnchor {
                 "invalid evidence transaction hash"
             );
         }
-        let bond = NearToken::from_millinear(250).as_yoctonear();
+        let assignment_seq = if verifier_hash == t2::implementation_hash() {
+            assert!(
+                matches!(failure_class, FailureClass::F1 | FailureClass::F3),
+                "unsupported T2 claim class"
+            );
+            let seq = evidence_seqs[0];
+            let assignment =
+                &log.events[usize::try_from(seq).expect("assignment sequence out of range")];
+            assert_eq!(
+                assignment.kind, "task_assigned",
+                "first evidence must identify assignment"
+            );
+            let link = assignment
+                .task
+                .as_ref()
+                .expect("assignment has no task binding");
+            for cited in &evidence_seqs {
+                if let Some(other) = &log.events[*cited as usize].task {
+                    assert!(other == link, "evidence refers to another task");
+                }
+            }
+            Some(seq)
+        } else {
+            None
+        };
+        let bond = self.parameters.blame_bond.0;
         let claim_id = self.next_claim_id;
         let next_claim_id = claim_id.checked_add(1).expect("claim ID overflow");
         let claim_height = env::block_height();
@@ -316,6 +458,10 @@ impl LogAnchor {
                 status: ClaimStatus::Pending,
                 challenger: None,
                 corrected_attribution: None,
+                challenge_bond: U128(0),
+                verifier_hash,
+                assignment_seq,
+                evidence_snapshot: None,
             },
         );
         self.claims.flush();
@@ -333,8 +479,247 @@ impl LogAnchor {
         claim_id
     }
 
+    pub fn get_parameters(&self) -> Parameters {
+        self.parameters.clone()
+    }
+
+    pub fn update_parameters(&mut self, stake: U128, blame_bond: U128, challenge_bond: U128) {
+        assert_eq!(env::predecessor_account_id(), self.owner, "owner only");
+        assert!(
+            stake.0 >= NearToken::from_millinear(250).as_yoctonear(),
+            "stake below slash"
+        );
+        assert!(
+            blame_bond.0 > 0 && blame_bond.0 == challenge_bond.0,
+            "bonds must be positive and matching"
+        );
+        self.parameters = Parameters {
+            stake,
+            blame_bond,
+            challenge_bond,
+        };
+    }
+
+    /// Bond-only challenge: first eligible caller locks the dispute. Payload
+    /// verification and resolution are deferred to adjudication (2.8 onward).
+    #[payable]
+    pub fn challenge(&mut self, claim_id: u64) {
+        let mut claim = self.claims.get(&claim_id).cloned().expect("unknown claim");
+        assert!(
+            matches!(claim.status, ClaimStatus::Pending),
+            "claim must be pending"
+        );
+        assert!(
+            env::block_height() <= claim.challenge_deadline,
+            "challenge window expired"
+        );
+        let storage_before = env::storage_usage();
+        let bond = claim.bond.0;
+        claim.challenger = Some(env::predecessor_account_id());
+        claim.challenge_bond = U128(bond);
+        claim.status = ClaimStatus::Challenged;
+        let log = self.runs.get(&claim.run_id).expect("unknown run");
+        claim.evidence_snapshot = Some(t2::EvidenceSnapshot {
+            event_count: log.events.len() as u64,
+            head_hash: log.head_hash.clone(),
+            challenge_height: env::block_height(),
+        });
+        self.claims.insert(claim_id, claim);
+        self.claims.flush();
+        let cost = u128::from(env::storage_usage() - storage_before)
+            * env::storage_byte_cost().as_yoctonear();
+        let required = bond.checked_add(cost).expect("deposit overflow");
+        let deposit = env::attached_deposit().as_yoctonear();
+        assert!(
+            deposit >= required,
+            "insufficient challenge bond and storage deposit"
+        );
+        if deposit > required {
+            Promise::new(env::predecessor_account_id())
+                .transfer(NearToken::from_yoctonear(deposit - required))
+                .detach();
+        }
+    }
+
     pub fn get_claim(&self, claim_id: u64) -> Option<Claim> {
         self.claims.get(&claim_id).cloned()
+    }
+
+    pub fn get_verifier_info(&self) -> t2::VerifierInfo {
+        t2::info()
+    }
+
+    /// Compute-only 2.8 entry point. No claim state, money or reputation changes.
+    /// 2.9 will persist this result through adjudicate(claim_id, task_spec, payloads).
+    pub fn preview_adjudication(
+        &self,
+        claim_id: u64,
+        task_spec: Base64VecU8,
+        payloads: Vec<t2::Payload>,
+    ) -> t2::Verification {
+        assert!(
+            env::input().is_none_or(|input| input.len() <= t2::MAX_CALL_BYTES),
+            "adjudication call exceeds byte limit"
+        );
+        assert!(
+            payloads.len() <= 2,
+            "direct T2 task requires at most two payloads"
+        );
+        let mut bytes = task_spec.0.len();
+        for payload in &payloads {
+            assert!(
+                payload.bytes.0.len() <= t2::MAX_PAYLOAD_BYTES,
+                "payload exceeds byte limit"
+            );
+            bytes = bytes
+                .checked_add(payload.bytes.0.len())
+                .expect("evidence size overflow");
+        }
+        assert!(
+            bytes <= t2::MAX_EVIDENCE_BYTES,
+            "evidence exceeds byte limit"
+        );
+        let claim = self.claims.get(&claim_id).expect("unknown claim");
+        assert!(
+            matches!(claim.status, ClaimStatus::Challenged),
+            "claim must be challenged"
+        );
+        assert_eq!(
+            claim.verifier_hash,
+            t2::implementation_hash(),
+            "unsupported verifier implementation"
+        );
+        assert!(
+            matches!(claim.failure_class, FailureClass::F1 | FailureClass::F3),
+            "unsupported T2 claim class"
+        );
+        let log = self.runs.get(&claim.run_id).expect("unknown run");
+        assert_eq!(
+            claim.verifier_hash, log.verifier.verifier_hash,
+            "verifier pin mismatch"
+        );
+        assert_eq!(
+            hex::encode(env::sha256(&task_spec.0)),
+            log.verifier.task_spec_hash,
+            "task spec hash mismatch"
+        );
+        let spec = t2::parse_spec(&task_spec.0).unwrap_or_else(|error| env::panic_str(error));
+        let snapshot = claim
+            .evidence_snapshot
+            .as_ref()
+            .expect("missing evidence snapshot");
+        let count = usize::try_from(snapshot.event_count).expect("snapshot out of range");
+        assert!(
+            count > 0 && count <= t2::MAX_EVENTS && count <= log.events.len(),
+            "unsupported evidence snapshot"
+        );
+        let events = &log.events[..count];
+        let mut head = String::new();
+        for (seq, event) in events.iter().enumerate() {
+            assert!(
+                event.seq == seq as u64 && event.prev_hash == head,
+                "invalid stored event chain"
+            );
+            head = event_hash(event);
+        }
+        assert_eq!(head, snapshot.head_hash, "snapshot head mismatch");
+        let seq = claim
+            .assignment_seq
+            .expect("claim does not bind an assignment");
+        let assignment = events
+            .get(usize::try_from(seq).expect("assignment out of range"))
+            .expect("assignment outside snapshot");
+        assert_eq!(assignment.kind, "task_assigned", "not an assignment");
+        let link = assignment.task.as_ref().expect("missing task binding");
+        assert!(
+            link.assignment_seq == seq && link.parent_assignment_seq.is_none(),
+            "unsupported task binding"
+        );
+        let mut completions = events
+            .iter()
+            .filter(|event| event.kind == "settlement" && event.task.as_ref() == Some(link));
+        let completion = completions.next();
+        assert!(completions.next().is_none(), "ambiguous task completions");
+        if let Some(event) = completion {
+            assert_eq!(event.actor, link.worker, "completion actor mismatch");
+        }
+        assert_eq!(
+            payloads.len(),
+            if completion.is_some() { 2 } else { 1 },
+            "incomplete task evidence"
+        );
+        assert!(
+            payloads.windows(2).all(|pair| pair[0].seq != pair[1].seq),
+            "duplicate payload sequence"
+        );
+        for payload in &payloads {
+            assert!(
+                payload.seq == seq || completion.is_some_and(|event| payload.seq == event.seq),
+                "payload refers to another task or snapshot"
+            );
+            let event =
+                &events[usize::try_from(payload.seq).expect("payload sequence out of range")];
+            assert_eq!(
+                hex::encode(env::sha256(&payload.bytes.0)),
+                event.payload_hash,
+                "payload hash mismatch"
+            );
+        }
+        let input = payloads
+            .iter()
+            .find(|payload| payload.seq == seq)
+            .expect("missing assignment payload");
+        let output = completion.map(|event| {
+            payloads
+                .iter()
+                .find(|payload| payload.seq == event.seq)
+                .expect("missing completion payload")
+                .bytes
+                .0
+                .as_slice()
+        });
+        let check =
+            t2::verify(&spec, &input.bytes.0, output).unwrap_or_else(|error| env::panic_str(error));
+        let finding = match check {
+            t2::Check::PreconditionFault => Some(t2::Finding {
+                agent: assignment.actor.clone(),
+                failure_class: FailureClass::F3,
+                event_seq: seq,
+                origin: t2::Origin::Introduction,
+            }),
+            t2::Check::PostconditionFault => Some(t2::Finding {
+                agent: link.worker.clone(),
+                failure_class: FailureClass::F1,
+                event_seq: completion.expect("missing completion").seq,
+                origin: t2::Origin::Introduction,
+            }),
+            t2::Check::Passed => None,
+        };
+        let upheld = finding.as_ref().is_some_and(|fault| {
+            fault.agent == claim.blamed && fault.failure_class == claim.failure_class
+        });
+        let origin = finding.as_ref().and_then(|fault| {
+            if fault.failure_class == claim.failure_class {
+                Some(t2::Origin::Introduction)
+            } else if fault.failure_class == FailureClass::F3
+                && claim.failure_class == FailureClass::F1
+            {
+                Some(t2::Origin::Propagation)
+            } else {
+                None
+            }
+        });
+        t2::Verification {
+            verdict: if upheld {
+                t2::Verdict::Upheld
+            } else {
+                t2::Verdict::Overturned
+            },
+            finding,
+            origin,
+            assignment_seq: seq,
+            snapshot: snapshot.clone(),
+        }
     }
 
     /// Accept an unchallenged claim once height > its recorded deadline.

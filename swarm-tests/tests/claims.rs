@@ -24,7 +24,7 @@ fn pending_claim_bond_evidence_and_rollback() {
         .transact()
         .assert_success();
     sim.call("alice.near", "anchor.near", "register")
-        .args_json(json!({"run_id": "gate1", "agents": ["alice.near", "bob.near", "carol.near"]}))
+        .args_json(json!({"run_id": "gate1", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near", "bob.near", "carol.near"]}))
         .deposit(Balance::from_millinear(3010))
         .transact()
         .assert_success();
@@ -51,7 +51,7 @@ fn pending_claim_bond_evidence_and_rollback() {
         // These are actual simulator transaction hashes, not testnet evidence.
         tx_hashes.push(anchored.hash.to_string());
     }
-    let args = json!({"run_id": "gate1", "blamed": "bob.near", "failure_class": "F1",
+    let args = json!({"run_id": "gate1", "blamed": "bob.near", "failure_class": "F1", "verifier_hash": "11".repeat(32),
         "evidence_seqs": [0, 1, 2], "evidence_payload_hashes": payload_hashes,
         "evidence_tx_hashes": tx_hashes});
     let run_before: Value = sim
@@ -59,6 +59,11 @@ fn pending_claim_bond_evidence_and_rollback() {
         .json();
     for (field, value, message) in [
         ("run_id", json!("missing"), "unknown run"),
+        (
+            "verifier_hash",
+            json!("ff".repeat(32)),
+            "verifier hash mismatch",
+        ),
         (
             "blamed",
             json!("watcher.near"),
@@ -100,7 +105,7 @@ fn pending_claim_bond_evidence_and_rollback() {
             json!(["not-a-hash!", tx_hashes[1], tx_hashes[2]]),
             "invalid evidence transaction hash",
         ),
-        ("failure_class", json!("F2"), "unknown variant"),
+        ("failure_class", json!("F6"), "unknown variant"),
     ] {
         let mut invalid = args.clone();
         invalid[field] = value;
@@ -206,6 +211,149 @@ fn pending_claim_bond_evidence_and_rollback() {
         sim.view("anchor.near", "get_claim", json!({"claim_id": 0}))
             .json::<Value>(),
         claim
+    );
+    let pin: Value = sim
+        .view("anchor.near", "get_run", json!({"run_id": "gate1"}))
+        .json();
+    assert_eq!(pin["verifier"]["verifier_hash"], "11".repeat(32));
+    assert_eq!(pin["verifier"]["task_spec_hash"], "22".repeat(32));
+    let params = json!({"stake": Balance::from_near(2).as_yoctonear().to_string(),
+        "blame_bond": Balance::from_millinear(500).as_yoctonear().to_string(),
+        "challenge_bond": Balance::from_millinear(500).as_yoctonear().to_string()});
+    sim.call("bob.near", "anchor.near", "update_parameters")
+        .args_json(params.clone())
+        .transact()
+        .assert_panic_contains("owner only");
+    let mut invalid = params.clone();
+    invalid["challenge_bond"] = json!("1");
+    sim.call("alice.near", "anchor.near", "update_parameters")
+        .args_json(invalid)
+        .transact()
+        .assert_panic_contains("bonds must be positive and matching");
+    sim.call("alice.near", "anchor.near", "update_parameters")
+        .args_json(params.clone())
+        .transact()
+        .assert_success();
+    assert_eq!(
+        sim.view("anchor.near", "get_parameters", json!({}))
+            .json::<Value>(),
+        params
+    );
+    // Existing claim keeps its original 0.25 matching bond despite the update.
+    let rejected = sim
+        .call("watcher.near", "anchor.near", "challenge")
+        .args_json(json!({"claim_id": 0}))
+        .deposit(Balance::from_millinear(250))
+        .transact();
+    rejected.assert_panic_contains("insufficient challenge bond and storage deposit");
+    assert_eq!(rejected.effects().near_net("anchor.near"), Delta::ZERO);
+    assert_eq!(
+        sim.view("anchor.near", "get_claim", json!({"claim_id": 0}))
+            .json::<Value>(),
+        claim
+    );
+    let challenged = sim
+        .call("watcher.near", "anchor.near", "challenge")
+        .args_json(json!({"claim_id": 0}))
+        .deposit(Balance::from_millinear(260))
+        .transact();
+    challenged.assert_success();
+    let challenge_effects = challenged.effects();
+    let challenge_storage = sim
+        .storage_cost(u64::try_from(challenge_effects.storage_bytes("anchor.near")).unwrap())
+        .as_yoctonear();
+    assert_eq!(
+        challenge_effects.near_net("anchor.near"),
+        Delta::gain(bond + challenge_storage)
+    );
+    assert!(challenge_effects.pending.is_empty());
+    let challenged_state: Value = sim
+        .view("anchor.near", "get_claim", json!({"claim_id": 0}))
+        .json();
+    assert_eq!(challenged_state["status"], "Challenged");
+    assert_eq!(challenged_state["challenger"], "watcher.near");
+    assert_eq!(challenged_state["challenge_bond"], bond.to_string());
+    sim.call("bob.near", "anchor.near", "challenge")
+        .args_json(json!({"claim_id": 0}))
+        .deposit(Balance::from_near(1))
+        .transact()
+        .assert_panic_contains("claim must be pending");
+    sim.call("carol.near", "anchor.near", "finalize")
+        .args_json(json!({"claim_id": 0}))
+        .transact()
+        .assert_panic_contains("claim must be unchallenged");
+    let late: Value = sim
+        .view("anchor.near", "get_claim", json!({"claim_id": 1}))
+        .json();
+    sim.advance_to(late["challenge_deadline"].as_u64().unwrap());
+    sim.call("bob.near", "anchor.near", "challenge")
+        .args_json(json!({"claim_id": 1}))
+        .deposit(Balance::from_near(1))
+        .transact()
+        .assert_panic_contains("challenge window expired");
+    let verifier = json!({"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null});
+    sim.call("alice.near", "anchor.near", "register")
+        .args_json(json!({"run_id": "updated", "agents": ["bob.near"], "verifier": verifier}))
+        .deposit(Balance::from_millinear(2010))
+        .transact()
+        .assert_success();
+    let updated: Value = sim
+        .view("anchor.near", "get_run", json!({"run_id": "updated"}))
+        .json();
+    assert_eq!(
+        updated["agents"][0]["locked_stake"],
+        Balance::from_near(2).as_yoctonear().to_string()
+    );
+    assert_eq!(
+        sim.view("anchor.near", "get_run", json!({"run_id": "gate1"}))
+            .json::<Value>(),
+        run_before
+    );
+    let anchored = sim.call("bob.near", "anchor.near", "anchor")
+        .args_json(json!({"run_id": "updated", "seq": 0, "actor": "bob.near", "kind": "settlement", "payload_hash": "ab".repeat(32), "prev_hash": ""}))
+        .deposit(Balance::from_millinear(10)).transact();
+    anchored.assert_success();
+    let new_claim = sim.call("alice.near", "anchor.near", "file_claim")
+        .args_json(json!({"run_id": "updated", "blamed": "bob.near", "failure_class": "F1", "verifier_hash": "11".repeat(32),
+            "evidence_seqs": [0], "evidence_payload_hashes": ["ab".repeat(32)], "evidence_tx_hashes": [anchored.hash.to_string()]}))
+        .deposit(Balance::from_millinear(520)).transact();
+    new_claim.assert_success();
+    let new_id: u64 = new_claim.json();
+    let new_state: Value = sim
+        .view("anchor.near", "get_claim", json!({"claim_id": new_id}))
+        .json();
+    assert_eq!(
+        new_state["bond"],
+        Balance::from_millinear(500).as_yoctonear().to_string()
+    );
+    let deadline = new_state["challenge_deadline"].as_u64().unwrap();
+    sim.advance_to(deadline - 2);
+    let first = sim
+        .call("bob.near", "anchor.near", "challenge")
+        .args_json(json!({"claim_id": new_id}))
+        .deposit(Balance::from_millinear(510))
+        .submit();
+    let second = sim
+        .call("carol.near", "anchor.near", "challenge")
+        .args_json(json!({"claim_id": new_id}))
+        .deposit(Balance::from_millinear(510))
+        .submit();
+    sim.settle();
+    let first_outcome = sim.outcome(first);
+    first_outcome.assert_success();
+    assert_eq!(
+        first_outcome.receipt("challenge").unwrap().block_height,
+        deadline
+    );
+    sim.outcome(second)
+        .assert_panic_contains("claim must be pending");
+    let final_state: Value = sim
+        .view("anchor.near", "get_claim", json!({"claim_id": new_id}))
+        .json();
+    assert_eq!(final_state["challenger"], "bob.near");
+    assert_eq!(
+        final_state["challenge_bond"],
+        Balance::from_millinear(500).as_yoctonear().to_string()
     );
     sim.findings().assert_none();
 }

@@ -26,19 +26,18 @@ fn registered_run_checks_and_storage_rollback() {
         .args_json(json!({}))
         .transact()
         .assert_success();
-    let registration =
-        json!({"run_id": "gate1", "agents": ["alice.near", "bob.near", "carol.near"]});
+    let registration = json!({"run_id": "gate1", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near", "bob.near", "carol.near"]});
     for (args, message) in [
         (
-            json!({"run_id": "", "agents": ["alice.near"]}),
+            json!({"run_id": "", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near"]}),
             "run_id must not be empty",
         ),
         (
-            json!({"run_id": "empty", "agents": []}),
+            json!({"run_id": "empty", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": []}),
             "agents must not be empty",
         ),
         (
-            json!({"run_id": "duplicate", "agents": ["alice.near", "alice.near"]}),
+            json!({"run_id": "duplicate", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near", "alice.near"]}),
             "agents must be unique",
         ),
     ] {
@@ -200,7 +199,7 @@ fn registered_run_checks_and_storage_rollback() {
         .assert_panic_contains("unknown run");
     // A second run has its own head and collateral, rather than sharing state.
     sim.call("bob.near", "anchor.near", "register")
-        .args_json(json!({"run_id": "second", "agents": ["bob.near"]}))
+        .args_json(json!({"run_id": "second", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["bob.near"]}))
         .deposit(Balance::from_millinear(1010))
         .transact()
         .assert_success();
