@@ -24,8 +24,7 @@ decision in the handover:
 - The paper says "post-hoc error discovery—even outside the dispute window—triggers a
   retroactive update to reputation." We do NOT implement post-hoc updates outside the
   dispute window (deliberate simplification, design principle 4). README must acknowledge this.
-- Directory has 8 projects submitted (not 217). Novelty still holds (0 blame/attribution
-  entries). Plan's track competition numbers are unreliable; re-pull before submission.
+- Directory has 257 projects submitted (not 8 — earlier count was page 1 only). Novelty still holds (0 blame/attribution entries). Plan's track competition numbers are unreliable; re-pull before submission. Competition is real but our niche is unoccupied.
 - Prior art details for Writ, FlashFirm, CartelBreaker are UNVERIFIED. Spot-check repos
   before citing specific numbers (3 levels/16 agents, 2-of-3 evaluators).
 

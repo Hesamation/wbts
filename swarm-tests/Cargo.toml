@@ -1,0 +1,12 @@
+[package]
+name = "swarm-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+near-contract-sim = { git = "https://github.com/near/near-contract-sim", rev = "059cfa18900cacad2d9b86b1e989f476b4c6591a" }
+cargo-near-build = "0.11"
+
+[profile.dev.package."*"]
+debug = false
