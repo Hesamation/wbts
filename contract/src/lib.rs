@@ -1,6 +1,6 @@
 //! Gate-1 registered run logs with creator-funded participation stakes.
-//! Challenged direct T2 tasks have compute-only causal verification. Persisting
-//! adjudication and releasing participation stakes are later work items.
+//! Challenged direct T2 tasks support persisted causal adjudication. Challenged
+//! payouts and releasing participation stakes are later work items.
 
 pub mod t2;
 
@@ -75,6 +75,8 @@ pub enum ClaimStatus {
     Pending,
     Challenged,
     Finalized,
+    AdjudicatedUpheld,
+    AdjudicatedOverturned,
 }
 
 #[near(serializers = [json, borsh])]
@@ -93,11 +95,15 @@ pub struct Claim {
     challenge_deadline: u64,
     status: ClaimStatus,
     challenger: Option<AccountId>,
+    /// U8: a newly named agent needs its own bonded claim and defense window before any reputation penalty.
     corrected_attribution: Option<AccountId>,
     challenge_bond: U128,
     verifier_hash: String,
     assignment_seq: Option<u64>,
     evidence_snapshot: Option<t2::EvidenceSnapshot>,
+    adjudication_result: Option<t2::Verification>,
+    /// Challenger-funded physical storage, consumed by the persisted result.
+    adjudication_padding: Vec<u8>,
 }
 
 #[near(contract_state)]
@@ -468,6 +474,8 @@ impl LogAnchor {
                 verifier_hash,
                 assignment_seq,
                 evidence_snapshot: None,
+                adjudication_result: None,
+                adjudication_padding: Vec::new(),
             },
         );
         self.claims.flush();
@@ -506,8 +514,8 @@ impl LogAnchor {
         };
     }
 
-    /// Bond-only challenge: first eligible caller locks the dispute. Payload
-    /// verification and resolution are deferred to adjudication (2.8 onward).
+    /// First eligible caller locks the dispute and funds snapshot/result storage
+    /// separately from the matching bond. No payload bytes are supplied here.
     #[payable]
     pub fn challenge(&mut self, claim_id: u64) {
         let mut claim = self.claims.get(&claim_id).cloned().expect("unknown claim");
@@ -530,6 +538,8 @@ impl LogAnchor {
             head_hash: log.head_hash.clone(),
             challenge_height: env::block_height(),
         });
+        claim.adjudication_padding =
+            vec![0; adjudication_capacity(claim.evidence_snapshot.as_ref().unwrap())];
         self.claims.insert(claim_id, claim);
         self.claims.flush();
         let cost = u128::from(env::storage_usage() - storage_before)
@@ -555,8 +565,57 @@ impl LogAnchor {
         t2::info()
     }
 
+    /// Persist the deterministic preview once. Anyone may pay gas; no principal,
+    /// reputation or transfers change. Replay returns the original full result.
+    pub fn adjudicate(
+        &mut self,
+        claim_id: u64,
+        task_spec: Base64VecU8,
+        payloads: Vec<t2::Payload>,
+    ) -> t2::Verification {
+        let mut claim = self.claims.get(&claim_id).cloned().expect("unknown claim");
+        if let Some(result) = &claim.adjudication_result {
+            return result.clone();
+        }
+        let result = self.preview_adjudication(claim_id, task_spec, payloads);
+        let before_len = near_sdk::borsh::to_vec(&claim)
+            .expect("serialize claim")
+            .len();
+        claim.status = match result.verdict {
+            t2::Verdict::Upheld => ClaimStatus::AdjudicatedUpheld,
+            t2::Verdict::Overturned => ClaimStatus::AdjudicatedOverturned,
+        };
+        claim.corrected_attribution = result.finding.as_ref().map(|fault| fault.agent.clone());
+        claim.adjudication_result = Some(result.clone());
+        claim.adjudication_padding.clear();
+        let used = near_sdk::borsh::to_vec(&claim)
+            .expect("serialize claim")
+            .len();
+        claim.adjudication_padding.resize(
+            before_len
+                .checked_sub(used)
+                .expect("adjudication result exceeds funded slot"),
+            0,
+        );
+        assert_eq!(
+            near_sdk::borsh::to_vec(&claim)
+                .expect("serialize claim")
+                .len(),
+            before_len
+        );
+        let storage_before = env::storage_usage();
+        self.claims.insert(claim_id, claim);
+        self.claims.flush();
+        assert_eq!(
+            env::storage_usage(),
+            storage_before,
+            "adjudication storage changed"
+        );
+        result
+    }
+
     /// Compute-only 2.8 entry point. No claim state, money or reputation changes.
-    /// 2.9 will persist this result through adjudicate(claim_id, task_spec, payloads).
+    /// adjudicate reuses this exact computation before persisting its result.
     pub fn preview_adjudication(
         &self,
         claim_id: u64,
@@ -793,6 +852,32 @@ impl LogAnchor {
     pub fn get_treasury(&self) -> U128 {
         self.treasury_balance
     }
+}
+
+/// Derive the maximum growth from the actual Borsh schema: both optional fields
+/// become Some, with the largest AccountId (64 bytes), finding and origin. Enum
+/// variants have equal encoded widths. Snapshot bytes are fixed at challenge.
+fn adjudication_capacity(snapshot: &t2::EvidenceSnapshot) -> usize {
+    let agent: AccountId = "a".repeat(64).parse().expect("maximum account id");
+    let result = t2::Verification {
+        verdict: t2::Verdict::Upheld,
+        finding: Some(t2::Finding {
+            agent: agent.clone(),
+            failure_class: FailureClass::F1,
+            event_seq: u64::MAX,
+            origin: t2::Origin::Introduction,
+        }),
+        origin: Some(t2::Origin::Introduction),
+        assignment_seq: u64::MAX,
+        snapshot: snapshot.clone(),
+    };
+    // Each Option already has its one-byte tag when None; only its content grows.
+    near_sdk::borsh::to_vec(&result)
+        .expect("serialize result capacity")
+        .len()
+        + near_sdk::borsh::to_vec(&agent)
+            .expect("serialize account capacity")
+            .len()
 }
 
 fn event_hash(event: &LogEvent) -> String {

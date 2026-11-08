@@ -1,6 +1,6 @@
-# Contract status through 2.8
+# Contract status through 2.9
 
-The contract currently supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **compute-only causal verification of direct T2 fee-split tasks**. `preview_adjudication` executes the checks in NEAR WASM and returns a verdict. It does not persist an adjudicated claim, move bonds, or update reputation. Recording decisions is 2.9; challenged-claim payouts are 2.10. Only the earlier unchallenged `finalize` path is implemented.
+The contract supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **persisted causal adjudication of direct T2 fee-split tasks**. `preview_adjudication` computes a verdict without changing state. Permissionless `adjudicate` persists that exact result once, without transfers or reputation effects. Challenged-claim payouts remain 2.10; only the earlier unchallenged `finalize` path is implemented.
 
 ## Verification architecture and production direction
 
@@ -58,7 +58,7 @@ This first causal slice admits direct independent delegations. Explicit parent l
 
 ## Snapshot and in-call evidence
 
-The first successful, fully funded `challenge(claim_id)` freezes the run's event count, head hash and challenge height. Defense anchored before that challenge is eligible, even if anchored after filing. Later appends are excluded. The worker should anchor its defense before challenging. Snapshot creation and the matching challenge bond roll back together if storage funding is insufficient.
+The first successful, fully funded `challenge(claim_id)` freezes the run's event count, head hash and challenge height. Defense anchored before that challenge is eligible, even if anchored after filing. Later appends are excluded. The worker should anchor its defense before challenging. Snapshot creation, result-slot preallocation and the matching challenge bond roll back together if storage funding is insufficient. The challenger pays measured storage separately from the bond, including a bounded result slot sized from the Borsh result/attribution schema with a maximum 64-byte account ID.
 
 `preview_adjudication(claim_id, task_spec, payloads)` requires a Challenged claim. Spec and payload bodies are exact base64-encoded bytes:
 
@@ -77,11 +77,19 @@ The verifier checks the frozen stored-event chain, implementation/spec identitie
 
 If a completion exists in the snapshot, both payloads are required, including when the input later proves invalid. If no completion exists, invalid authenticated input may still establish F3. Valid input without a completion produces no verdict; timeout logic is not implemented here. Missing, forged, mismatching, oversized, cross-task or unsupported evidence rejects without changing the claim, reputation or money. A caller's bad bytes are not an F4 conviction of the original agent. Withholding responsibility and recovery remain for 2.18.
 
+## Persisting the decision
+
+`adjudicate(claim_id, task_spec, payloads) -> Verification` takes the same exact-base64-byte ABI as preview. The first call requires Challenged status and invokes the existing preview computation directly in Rust. It stores the full result as `adjudication_result`, sets status to AdjudicatedUpheld or AdjudicatedOverturned, and sets `corrected_attribution` to the finding agent (or null for passing S2). The field also names the original blamed agent when its allegation is upheld; it is not necessarily a different agent.
+
+Anyone may call after challenge, including after the challenge deadline; there is no separate adjudication deadline. Subsequent decodable calls return the stored result without rechecking evidence or writing state. SDK JSON/type and nonpayable-deposit checks still apply. Preview itself continues to require Challenged status; read the persisted result through `get_claim` afterward.
+
+Adjudication consumes the challenger-funded padding, preserving the serialized claim length and asserting unchanged flushed storage usage. It accepts no deposit, sends no transfers, and changes no stakes, bonds, treasury or reputation; its caller pays gas. Unused padding remains paid physical storage, with no deletion/refund policy added here. Both bonds remain locked, and the existing finalize guard still rejects adjudicated claims until 2.10. A missing or unauthenticatable evidence submission stays Challenged and may be retried.
+
 ## Causal result and scope boundary
 
 F3 input validation precedes F1 output checking. In S6, invalid input produces a finding against its delegator; an F1 claim against the worker is Overturned, even if the output also fails. For valid input and bad output, the finding is F1 against the assigned worker. Passing input/output produces no finding. Upheld requires **both** the finding's class and agent to match the claim.
 
-`finding.origin` describes the decisive fault and is Introduction in this slice. Top-level `origin` describes the reported check relative to that fault: S6's reported F1 is Propagation, while the actual F3 finding is Introduction. All-passing evidence has no finding/origin. Corrected attribution is a finding; it never directly slashes the newly named agent. A later penalty needs its own bonded claim and defense window.
+`finding.origin` describes the decisive fault and is Introduction in this slice. Top-level `origin` describes the reported check relative to that fault: S6's reported F1 is Propagation, while the actual F3 finding is Introduction. All-passing evidence has no finding/origin. Corrected attribution is a finding; it never directly slashes the newly named agent. U8: a newly named agent receives no reputation effect here; a later penalty needs its own bonded claim, defense window and applicable finalization.
 
 ## Evidence and gas bounds
 
@@ -97,7 +105,7 @@ F3 input validation precedes F1 output checking. In S6, invalid input produces a
 
 The effective supported spec + two payload bodies total at most 17408 bytes. The wider aggregate/wire guards also reject malformed calls. SDK deserialization precedes method entry; these guards do not claim to prevent all parsing work on a malicious transaction. Callers pay their transaction gas.
 
-The measured 100-event case uses 128 ledger entries summing to u128::MAX, a 1024-byte spec and two 8192-byte bodies. See `../codex-log/2.8-sim-gas.json` for exact simulator gas and fees; these are not measured testnet prices or a proof of all possible gas paths. Single-call gas bounds the evidence that can be processed. **Chunked upload is future work.** The planned state-changing `adjudicate(claim_id, task_spec, payloads)` caller pays that call's gas; adjudication gas is not priced into the existing economics. Do not describe those figures as all-in costs.
+The measured 100-event case uses 128 ledger entries summing to u128::MAX, a 1024-byte spec and two 8192-byte bodies. See `../codex-log/2.9-sim-gas.json` for stateful adjudication simulator gas/storage and `../codex-log/2.9-preview-stress.json` for preview; these are not measured testnet prices or a proof of all possible gas paths. Single-call gas bounds the evidence that can be processed. **Chunked upload is future work.** The state-changing `adjudicate(claim_id, task_spec, payloads)` caller pays that call's gas; adjudication gas is not priced into the existing economics. Do not describe those figures as all-in costs.
 
 Hashes may commit to off-chain bytes that later exceed these bounds or become unavailable. The hash-only anchoring API cannot prove preimage size/availability. Such a submission gets no verdict here; there is no automatic withholding penalty or resolution guarantee. Supporting production data availability and recovery is outstanding work.
 
@@ -105,7 +113,7 @@ Hashes may commit to off-chain bytes that later exceed these bounds or become un
 
 `new(demo?)` assigns the initializing predecessor as owner; default S=1 NEAR, B=C=0.25 NEAR; default window 600 blocks, explicit demo=true selects 60. `update_parameters` is owner-only; existing stakes and filed bonds do not change. New claims use current B; challenges match the filed bond. S must cover the fixed 0.25 slash and B=C>0. These adjustable amounts do not justify extending default economic thresholds to arbitrary settings.
 
-Registration, filing and challenge fund their measured storage separately from principal and refund excess. Remaining stakes stay locked. Failed reporter-payout recovery is unimplemented. Challenged claims stay Challenged after preview until 2.9/2.10 implement their lifecycle.
+Registration, filing and challenge fund their measured storage separately from principal and refund excess. Remaining stakes stay locked. Failed reporter-payout recovery is unimplemented. Preview leaves claims Challenged; adjudicate persists their decision, while challenged payouts remain unimplemented until 2.10.
 
 Eligibility currently permits self-claims and challenges by any account, including the reporter and blamed agent. Blamed-agent self-challenge is an intended defense. Reporter self-challenge is also admitted; there is no timeout or recovery for unresolved challenged claims in this slice. This remains a lifecycle limitation to review when implementing resolution, rather than an established safe self-dealing policy. `get_reputation` returns the baseline 100 for an unknown account; that value does not prove registration or participation.
 

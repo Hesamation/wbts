@@ -53,9 +53,16 @@ impl Run {
     }
 
     fn with_spec(spec: Vec<u8>) -> Self {
+        Self::with_worker(spec, WORKER)
+    }
+
+    fn with_worker(spec: Vec<u8>, worker: &str) -> Self {
         let mut sim = Sim::new();
         for name in ["sponsor.near", COORD, WORKER, REVIEWER, CALLER] {
             sim.create_account(name, Balance::from_near(100));
+        }
+        if worker != WORKER {
+            sim.create_account(worker, Balance::from_near(100));
         }
         sim.deploy(CONTRACT, wasm().clone());
         // Sponsor/creator deliberately differs from the actual input producer.
@@ -70,7 +77,7 @@ impl Run {
             "source-and-dependency-manifest-sha256-v1"
         );
         sim.call("sponsor.near", CONTRACT, "register")
-            .args_json(json!({"run_id": "t2", "agents": [COORD, WORKER, REVIEWER],
+            .args_json(json!({"run_id": "t2", "agents": [COORD, worker, REVIEWER],
                 "verifier": {"task_spec_hash": digest(&spec), "verifier_hash": verifier, "verifier_key": null},
                 "task_spec": STANDARD.encode(&spec)}))
             .deposit(Balance::from_millinear(3050)).transact().assert_success();
@@ -298,16 +305,21 @@ fn reject_forged_incomplete_or_cross_task_evidence_without_verdict() {
             "payload refers to another task or snapshot",
         ),
     ] {
-        let out = r
-            .sim
-            .call(CALLER, CONTRACT, "preview_adjudication")
-            .args_json(args)
-            .gas(Gas::from_teragas(100))
-            .transact();
-        out.assert_panic_contains(message);
-        assert!(out.effects().near.is_empty());
-        assert_eq!(r.state(id), before);
+        for method in ["preview_adjudication", "adjudicate"] {
+            let out = r
+                .sim
+                .call(CALLER, CONTRACT, method)
+                .args_json(args.clone())
+                .gas(Gas::from_teragas(100))
+                .transact();
+            out.assert_panic_contains(message);
+            assert!(out.effects().near.is_empty());
+            assert_eq!(out.effects().storage_bytes(CONTRACT), 0);
+            assert_eq!(r.state(id), before);
+        }
     }
+    let expected = r.preview(id, &[root, done]);
+    assert_eq!(r.persist(id, &[root, done]), expected); // rejection is retryable
     r.sim.findings().assert_none();
 }
 
@@ -329,6 +341,7 @@ fn challenge_snapshot_includes_prior_defense_and_excludes_later_appends() {
         None,
     );
     assert_eq!(r.preview(id, &[root, done]), expected);
+    assert_eq!(r.persist(id, &[root, done]), expected);
     // A completion committed after a different task's challenge is excluded.
     let second_root = r.assign(WORKER, &input());
     let second_id = r.file(second_root, WORKER, "F1");
@@ -348,6 +361,14 @@ fn challenge_snapshot_includes_prior_defense_and_excludes_later_appends() {
             r.args(second_id, &[second_root]),
         )
         .assert_panic_contains("missing completion");
+    let before = r.state(second_id);
+    let args = r.args(second_id, &[second_root, late]);
+    r.sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(args)
+        .transact()
+        .assert_panic_contains("incomplete task evidence");
+    assert_eq!(r.state(second_id), before);
     r.sim.findings().assert_none();
 }
 
@@ -525,11 +546,340 @@ fn task_admission_and_bindings_reject_ambiguous_authority() {
 }
 
 impl Run {
+    fn persist(&mut self, id: u64, seqs: &[u64]) -> Value {
+        let before = self.state(id);
+        let expected = self.preview(id, seqs);
+        let args = self.args(id, seqs);
+        let caller_before = self.sim.balance(CALLER).as_yoctonear();
+        let contract_before = self.sim.balance(CONTRACT);
+        let out = self
+            .sim
+            .call(CALLER, CONTRACT, "adjudicate")
+            .args_json(args)
+            .gas(Gas::from_teragas(100))
+            .transact();
+        out.assert_success();
+        let result: Value = out.json();
+        assert_eq!(result, expected);
+        assert!(out.effects().near.is_empty());
+        assert!(out.effects().pending.is_empty());
+        assert_eq!(out.effects().storage_bytes(CONTRACT), 0);
+        assert_eq!(self.sim.balance(CONTRACT), contract_before);
+        assert_eq!(
+            caller_before - self.sim.balance(CALLER).as_yoctonear(),
+            out.effects().gas_paid().as_yoctonear()
+        );
+        let after = self.state(id);
+        for field in ["run", "worker_rep", "coordinator_rep", "treasury"] {
+            assert_eq!(after[field], before[field]);
+        }
+        for field in [
+            "bond",
+            "challenge_bond",
+            "challenger",
+            "evidence_snapshot",
+            "challenge_deadline",
+        ] {
+            assert_eq!(after["claim"][field], before["claim"][field]);
+        }
+        assert_eq!(after["claim"]["adjudication_result"], result);
+        assert_eq!(
+            after["claim"]["corrected_attribution"],
+            result["finding"]["agent"]
+        );
+        assert_eq!(
+            after["claim"]["status"],
+            if result["verdict"] == "Upheld" {
+                "AdjudicatedUpheld"
+            } else {
+                "AdjudicatedOverturned"
+            }
+        );
+        result
+    }
+
     fn state_value(&self) -> Value {
         self.sim
             .view(CONTRACT, "get_run", json!({"run_id": "t2"}))
             .json()
     }
+}
+
+#[test]
+fn persisted_causal_verdicts_permissionless_and_replay() {
+    let longest = "w".repeat(64);
+    for (body, output, class, blamed, worker, challenger, verdict, fault, agent, origin) in [
+        (
+            input(),
+            passing(),
+            "F1",
+            WORKER,
+            WORKER,
+            WORKER,
+            "Overturned",
+            None,
+            None,
+            None,
+        ),
+        (
+            input(),
+            b"wrong".as_slice(),
+            "F1",
+            WORKER,
+            WORKER,
+            WORKER,
+            "Upheld",
+            Some("F1"),
+            Some(WORKER),
+            Some("Introduction"),
+        ),
+        (
+            b"malformed".to_vec(),
+            passing(),
+            "F3",
+            COORD,
+            WORKER,
+            WORKER,
+            "Upheld",
+            Some("F3"),
+            Some(COORD),
+            Some("Introduction"),
+        ),
+        (
+            b"malformed".to_vec(),
+            b"wrong".as_slice(),
+            "F1",
+            WORKER,
+            WORKER,
+            WORKER,
+            "Overturned",
+            Some("F3"),
+            Some(COORD),
+            Some("Propagation"),
+        ),
+        (
+            b"malformed".to_vec(),
+            b"wrong".as_slice(),
+            "F1",
+            WORKER,
+            WORKER,
+            REVIEWER,
+            "Overturned",
+            Some("F3"),
+            Some(COORD),
+            Some("Propagation"),
+        ),
+        (
+            input(),
+            b"wrong".as_slice(),
+            "F1",
+            REVIEWER,
+            WORKER,
+            WORKER,
+            "Overturned",
+            Some("F1"),
+            Some(WORKER),
+            Some("Introduction"),
+        ),
+        (
+            input(),
+            b"wrong".as_slice(),
+            "F1",
+            REVIEWER,
+            longest.as_str(),
+            REVIEWER,
+            "Overturned",
+            Some("F1"),
+            Some(longest.as_str()),
+            Some("Introduction"),
+        ),
+        (
+            input(),
+            passing(),
+            "F1",
+            longest.as_str(),
+            longest.as_str(),
+            REVIEWER,
+            "Overturned",
+            None,
+            None,
+            None,
+        ),
+    ] {
+        let spec =
+            serde_json::to_vec(&json!({"task_type": "t2_fee_split_v1", "fee_basis_points": 250}))
+                .unwrap();
+        let mut r = Run::with_worker(spec, worker);
+        let root = r.assign(worker, &body);
+        let done = r.complete(root, worker, output);
+        let id = r.file(root, blamed, class);
+        r.sim
+            .call(challenger, CONTRACT, "challenge")
+            .args_json(json!({"claim_id": id}))
+            .deposit(Balance::from_millinear(270))
+            .transact()
+            .assert_success();
+        let result = r.persist(id, &[done, root]);
+        assert_eq!(result["verdict"], verdict);
+        assert_eq!(
+            result["finding"]["failure_class"],
+            fault.map_or(Value::Null, |s| json!(s))
+        );
+        assert_eq!(
+            result["finding"]["agent"],
+            agent.map_or(Value::Null, |s| json!(s))
+        );
+        assert_eq!(result["origin"], origin.map_or(Value::Null, |s| json!(s)));
+        if fault.is_some() {
+            assert_eq!(result["finding"]["origin"], "Introduction");
+        }
+        assert_eq!(
+            r.sim
+                .view(CONTRACT, "get_reputation", json!({"agent": worker}))
+                .json::<u8>(),
+            100
+        );
+        let frozen = r.state(id);
+        // A decodable replay bypasses evidence validation, even for oversized or wrong bytes.
+        let replay = r
+            .sim
+            .call(COORD, CONTRACT, "adjudicate")
+            .args_json(json!({"claim_id": id, "task_spec": STANDARD.encode(b"{}"),
+                "payloads": [{"seq": 999, "bytes": STANDARD.encode(vec![0u8; 8193])}]}))
+            .transact();
+        replay.assert_success();
+        assert_eq!(replay.json::<Value>(), result);
+        assert!(replay.effects().near.is_empty());
+        assert_eq!(replay.effects().storage_bytes(CONTRACT), 0);
+        assert_eq!(r.state(id), frozen);
+        r.sim
+            .call(WORKER, CONTRACT, "finalize")
+            .args_json(json!({"claim_id": id}))
+            .transact()
+            .assert_panic_contains("claim must be unchallenged");
+        r.sim
+            .call(WORKER, CONTRACT, "challenge")
+            .args_json(json!({"claim_id": id}))
+            .deposit(Balance::from_millinear(270))
+            .transact()
+            .assert_panic_contains("claim must be pending");
+        let args = r.args(id, &[root, done]);
+        r.sim
+            .call(CALLER, CONTRACT, "adjudicate")
+            .args_json(args)
+            .deposit(Balance::from_yoctonear(1))
+            .transact()
+            .assert_panic_contains("doesn't accept deposit");
+        assert_eq!(r.state(id), frozen);
+        r.sim.findings().assert_none();
+    }
+}
+
+#[test]
+fn persisted_clean_task_ignores_failed_sibling() {
+    let mut r = Run::new(250);
+    let bad = r.assign(REVIEWER, b"invalid unrelated input");
+    r.complete(bad, REVIEWER, b"invalid unrelated result");
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, passing());
+    let id = r.file(root, WORKER, "F1");
+    r.challenge(id);
+    let result = r.persist(id, &[root, done]);
+    assert_eq!(result["verdict"], "Overturned");
+    assert_eq!(result["finding"], Value::Null);
+    assert_eq!(r.state(id)["claim"]["corrected_attribution"], Value::Null);
+    r.sim.findings().assert_none();
+}
+
+#[test]
+fn challenge_funds_result_slot_and_adjudication_state_boundaries() {
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, passing());
+    let id = r.file(root, WORKER, "F1");
+    let before = r.state(id);
+    let args = r.args(id, &[root, done]);
+    r.sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(args)
+        .transact()
+        .assert_panic_contains("claim must be challenged");
+    let args = r.args(999, &[root, done]);
+    r.sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(args)
+        .transact()
+        .assert_panic_contains("unknown claim");
+    let rejected = r
+        .sim
+        .call(WORKER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id": id}))
+        .deposit(Balance::from_millinear(250))
+        .transact();
+    rejected.assert_panic_contains("insufficient challenge bond and storage deposit");
+    assert_eq!(rejected.effects().near_net(CONTRACT), Delta::ZERO);
+    assert_eq!(rejected.effects().storage_bytes(CONTRACT), 0);
+    assert_eq!(r.state(id), before);
+    let challenged = r
+        .sim
+        .call(WORKER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id": id}))
+        .deposit(Balance::from_millinear(270))
+        .transact();
+    challenged.assert_success();
+    let storage = r
+        .sim
+        .storage_cost(u64::try_from(challenged.effects().storage_bytes(CONTRACT)).unwrap())
+        .as_yoctonear();
+    let required = Balance::from_millinear(250).as_yoctonear() + storage;
+    assert_eq!(
+        challenged.effects().near_net(CONTRACT),
+        Delta::gain(required)
+    );
+    assert_eq!(
+        challenged
+            .effects()
+            .near_paid(CONTRACT, WORKER)
+            .as_yoctonear(),
+        Balance::from_millinear(270).as_yoctonear() - required
+    );
+    let funded = r.state(id);
+    assert_eq!(funded["claim"]["challenge_bond"], before["claim"]["bond"]);
+    // Same schema/snapshot/caller widths let a new claim be funded exactly.
+    let exact_id = r.file(root, WORKER, "F1");
+    let exact = r
+        .sim
+        .call(WORKER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id": exact_id}))
+        .deposit(Balance::from_yoctonear(required))
+        .transact();
+    exact.assert_success();
+    assert_eq!(
+        exact.effects().near_paid(CONTRACT, WORKER).as_yoctonear(),
+        0
+    );
+    assert_eq!(exact.effects().near_net(CONTRACT), Delta::gain(required));
+    let final_id = r.file(root, WORKER, "F1");
+    let deadline = r.state(final_id)["claim"]["challenge_deadline"]
+        .as_u64()
+        .unwrap();
+    r.sim.advance_to(deadline + 1);
+    assert_eq!(r.persist(id, &[root, done])["verdict"], "Overturned");
+    assert_eq!(r.persist(exact_id, &[root, done])["verdict"], "Overturned");
+    r.sim
+        .call(COORD, CONTRACT, "finalize")
+        .args_json(json!({"claim_id": final_id}))
+        .transact()
+        .assert_success();
+    let finalized = r.state(final_id);
+    let args = r.args(final_id, &[root, done]);
+    r.sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(args)
+        .transact()
+        .assert_panic_contains("claim must be challenged");
+    assert_eq!(r.state(final_id), finalized);
+    r.sim.findings().assert_none();
 }
 
 #[test]
@@ -571,18 +921,61 @@ fn bounded_evidence_and_100_event_wasm_gas_measurement() {
         "gas_burnt": out.gas_burnt().as_gas(), "gas_paid_yocto": out.effects().gas_paid().as_yoctonear().to_string(),
         "attached_gas": 100_000_000_000_000u64});
     std::fs::write(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../codex-log/2.8-sim-gas.json"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../codex-log/2.9-preview-stress.json"),
         serde_json::to_vec_pretty(&metrics).unwrap(),
     )
     .unwrap();
     let published: Value = r.sim.view(CONTRACT, "get_verifier_info", json!({})).json();
     std::fs::write(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../codex-log/2.8-verifier-info.json"),
+            .join("../codex-log/2.9-verifier-info.json"),
         serde_json::to_vec_pretty(&published).unwrap(),
     )
     .unwrap();
-    println!("Measured gas: {metrics}");
+    println!("Measured preview gas: {metrics}");
+    let mut too_big = args.clone();
+    too_big["payloads"][0]["bytes"] = json!(STANDARD.encode(vec![0u8; 8193]));
+    r.sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(too_big)
+        .transact()
+        .assert_panic_contains("payload exceeds byte limit");
+    assert_eq!(r.state(id), before);
+    let mut too_big = args.clone();
+    too_big["payloads"][0]["bytes"] = json!(STANDARD.encode(vec![0u8; 50_000]));
+    r.sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(too_big)
+        .transact()
+        .assert_panic_contains("adjudication call exceeds byte limit");
+    assert_eq!(r.state(id), before);
+    let caller_before = r.sim.balance(CALLER).as_yoctonear();
+    let persisted = r
+        .sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(args.clone())
+        .gas(Gas::from_teragas(100))
+        .transact();
+    persisted.assert_success();
+    assert_eq!(persisted.json::<Value>(), out.json::<Value>());
+    assert!(persisted.effects().near.is_empty());
+    assert_eq!(persisted.effects().storage_bytes(CONTRACT), 0);
+    assert_eq!(
+        caller_before - r.sim.balance(CALLER).as_yoctonear(),
+        persisted.effects().gas_paid().as_yoctonear()
+    );
+    let mut persisted_metrics = metrics;
+    persisted_metrics["gas_burnt"] = json!(persisted.gas_burnt().as_gas());
+    persisted_metrics["gas_paid_yocto"] =
+        json!(persisted.effects().gas_paid().as_yoctonear().to_string());
+    persisted_metrics["storage_delta_bytes"] = json!(persisted.effects().storage_bytes(CONTRACT));
+    std::fs::write(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../codex-log/2.9-sim-gas.json"),
+        serde_json::to_vec_pretty(&persisted_metrics).unwrap(),
+    )
+    .unwrap();
+    println!("Measured adjudication gas: {persisted_metrics}");
     let mut too_big = args;
     let mut too_big_call = too_big.clone();
     too_big_call["payloads"][0]["bytes"] = json!(STANDARD.encode(vec![0u8; 50_000]));
