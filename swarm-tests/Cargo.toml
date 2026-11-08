@@ -9,6 +9,9 @@ near-contract-sim = { git = "https://github.com/near/near-contract-sim", rev = "
 cargo-near-build = "0.11"
 serde_json = "1"
 base64 = "0.22"
+wbts-cli = { path = "../cli" }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
 
 [profile.dev.package."*"]
 debug = false

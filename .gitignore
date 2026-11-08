@@ -1,5 +1,6 @@
 # Rust
 target/
+.wbts/
 Cargo.lock.bak
 
 # Keys / credentials (NEVER commit)

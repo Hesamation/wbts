@@ -1,18 +1,20 @@
 # Who Broke the Swarm
 
-> First *on-NEAR* implementation of Intelligent AI Delegation's §4.8 challenge game —
-> staked attribution with deterministic adjudication.
+Staked attribution on tamper-evident run logs, using the optimistic challenge model
+with deterministic adjudication for direct T2 F3/F1 claims.
 
-**Killer beat:** coordinator falsely blames a passing worker; the worker self-challenges;
-the claim is overturned — the reporter loses 0.25 NEAR, the victim earns 0.20 NEAR,
+**Killer beat:** coordinator falsely blames a passing worker; a watcher challenges;
+the claim is overturned — the reporter loses 0.25 NEAR, the challenger earns 0.20 NEAR,
 and no innocent agent is blamed: the corrected attribution is `none`.
 
-**Scope pin:** general mechanism, small varied demo runs — any agent count, any depth,
-deterministic-verifier tasks only, checkable classes F1–F5a only. The 3-agent pipeline
-is the worked example, not the limit.
+The 3-agent pipeline is the worked example. The current adjudicator supports direct
+T2 F3/F1 claims; nested traversal and post-hoc reputation updates outside the dispute
+window are not implemented.
 
 ## Status
-Build in progress (Phase 0). See `../collab/STATUS.md`.
+Contract Phase 2.10 and CLI core are implemented; the CLI live S2 gate is incomplete
+after an RPC rate-limit failure.
+See the [CLI instructions](cli/README.md) and [local status](STATUS.md).
 
 ## Tracks
 swarms (primary) + business + security.
@@ -22,5 +24,5 @@ TBD (any license allowed by hackathon rules).
 
 ---
 
-*README honesty skeleton (novelty sentence + admission rule + honest bound + watcher gap)
-lands in Phase 9 per the build plan. Do not cite numbers here until measured.*
+*Further submission documentation remains Phase 9 work. Every external claim needs
+supporting evidence.*
