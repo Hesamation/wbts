@@ -1,0 +1,51 @@
+{
+  "transaction_outcome": {
+    "outcome": {
+      "receipt_ids": [
+        "BMUEo6iEtQWsmbYNxVFC1qvyByduHrgopeeVzHnY5msX"
+      ]
+    }
+  },
+  "receipts_outcome": [
+    {
+      "id": "BMUEo6iEtQWsmbYNxVFC1qvyByduHrgopeeVzHnY5msX",
+      "block_hash": "H4qp21Xape5SRrfMyNt3zoE6YpNve1c85tgPGeHjtU1G",
+      "outcome": {
+        "executor_id": "s2.coord-wbts.testnet",
+        "status": {
+          "SuccessReceiptId": "DEbQ8rTDgQrFWRTqfMuhqPjRSZarHfZq4FHGFT9Zpmbr"
+        }
+      }
+    },
+    {
+      "id": "DEbQ8rTDgQrFWRTqfMuhqPjRSZarHfZq4FHGFT9Zpmbr",
+      "block_hash": "DAAn7aHBJ4h72KjogsCNcJUTbWhTxf8sBJrrnziw1rrV",
+      "outcome": {
+        "executor_id": "watcher-wbts.testnet",
+        "status": {
+          "SuccessValue": ""
+        }
+      }
+    },
+    {
+      "id": "5p9iVzshXYM2Xq8D6JMyt4y1gxM1kUqudcdwEGkirSU5",
+      "block_hash": "8B8mUkn2ffubcmxPcXZXwHG8aGd5awkAhJUkgLRxyCZZ",
+      "outcome": {
+        "executor_id": "coord-wbts.testnet",
+        "status": {
+          "SuccessValue": ""
+        }
+      }
+    },
+    {
+      "id": "7e9m4fuKJryHEjTQ3hCFr4PLMq4Fb67NKiS9KeAhBDy8",
+      "block_hash": "DAAn7aHBJ4h72KjogsCNcJUTbWhTxf8sBJrrnziw1rrV",
+      "outcome": {
+        "executor_id": "coord-wbts.testnet",
+        "status": {
+          "SuccessValue": ""
+        }
+      }
+    }
+  ]
+}

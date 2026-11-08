@@ -9,17 +9,19 @@ contract dependencies are unchanged.
 ## One-command S2
 
 ```sh
-cli/target/debug/cli --contract s2.coord-wbts.testnet run-demo s2
+cli/target/debug/cli --contract s2.coord-wbts.testnet \
+  --rpc-url https://rpc.testnet.fastnear.com run-demo s2 \
+  --registrar watcher-wbts.testnet
 ```
 
 `--contract` (or `WBTS_CONTRACT`) is overridable. `--rpc-url` (or `WBTS_RPC_URL`)
 selects an RPC; the CLI checks `chain_id=testnet` at connection and before every
 signature. Only named `.testnet` accounts are accepted. There is no deployment path.
 
-The recorded live attempt used `--registrar watcher-wbts.testnet` because the
-coordinator lacked registration funding. It stopped on RPC HTTP 429 during
-adjudication; the live end-to-end gate remains incomplete. Read
-[the live log](../codex-log/cli-s2-live.md) before spending more funds or recovering it.
+The recorded initial attempt on the default RPC stopped on HTTP 429. Claim 1 was
+subsequently settled with builder approval through the alternate endpoint above.
+Read [the live log](../codex-log/cli-s2-live.md) and
+[recovery/funding evidence](../codex-log/cli-s2-recovery.md) before repeating runs.
 
 Roles default to coordinator/reporter `coord-wbts.testnet`, worker
 `worker-wbts.testnet`, challenger `watcher-wbts.testnet`; override with `--reporter`,
@@ -102,6 +104,11 @@ challenger min(120, score+5). Fresh simulator state asserts 85/102/105; live rep
 preserve previous scores. Use otherwise idle accounts and an idle contract for
 inspectable accounting: concurrent activity invalidates these balance measurements.
 
+Execution height comes from the root receipt referenced by the transaction
+outcome. A successful contract call can return `SuccessValue` or forward a promise
+as `SuccessReceiptId`; finalize forwards the payout this way. The CLI checks FINAL
+execution and all receipt failures, including the forwarded payout and refunds.
+
 Public journals default to ignored `.wbts/`; override with `--journal-dir`.
 The per-run filename hashes contract account + run ID. Journals retain canonical
 payloads, confirmed heads, transactions, preview, snapshots and verification.
@@ -129,5 +136,6 @@ unchanged contract source. They cover every command, three separate anchor
 transactions, head mismatch, exact S2 settlement on fresh state, a second run
 with persistent reputation, and stopping after failed registration. Unit tests
 cover canonical payloads, network/account restrictions, bounded allowances,
-redacted credential errors and reputation cap/floor accounting. See
+redacted credential errors and reputation cap/floor accounting. A captured-response
+regression covers finalize forwarding its payout receipt. See
 [live-run evidence](../codex-log/cli-s2-live.md) for the real testnet result.

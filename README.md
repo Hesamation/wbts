@@ -12,8 +12,8 @@ T2 F3/F1 claims; nested traversal and post-hoc reputation updates outside the di
 window are not implemented.
 
 ## Status
-Contract Phase 2.10 and CLI core are implemented; the CLI live S2 gate is incomplete
-after an RPC rate-limit failure.
+Contract Phase 2.10 and CLI core are implemented; the fresh one-command CLI S2
+testnet run passed with exact money and baseline-relative reputation checks.
 See the [CLI instructions](cli/README.md) and [local status](STATUS.md).
 
 ## Tracks

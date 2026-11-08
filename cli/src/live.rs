@@ -320,13 +320,7 @@ impl Transport for Live {
                 receipt["outcome"]["status"]
             );
         }
-        let execution = receipts
-            .iter()
-            .find(|r| {
-                r["outcome"]["executor_id"] == self.contract
-                    && r["outcome"]["status"].get("SuccessValue").is_some()
-            })
-            .context("missing contract execution receipt")?;
+        let execution = execution_receipt(&outcome, &self.contract)?;
         let block = self.rpc("block", json!({"block_id":execution["block_hash"]}))?;
         let height = block["header"]["height"]
             .as_u64()
@@ -404,11 +398,53 @@ impl Transport for Live {
     }
 }
 
+fn execution_receipt<'a>(outcome: &'a Value, contract: &str) -> Result<&'a Value> {
+    let ids = outcome["transaction_outcome"]["outcome"]["receipt_ids"]
+        .as_array()
+        .context("missing transaction receipt IDs")?;
+    ensure!(
+        ids.len() == 1,
+        "single-call transaction must create one root receipt"
+    );
+    let receipt = outcome["receipts_outcome"]
+        .as_array()
+        .context("missing receipt outcomes")?
+        .iter()
+        .find(|r| r["id"] == ids[0])
+        .context("missing root contract execution receipt")?;
+    ensure!(
+        receipt["outcome"]["executor_id"] == contract,
+        "root receipt executor mismatch"
+    );
+    let status = &receipt["outcome"]["status"];
+    ensure!(
+        status.get("SuccessValue").is_some() || status.get("SuccessReceiptId").is_some(),
+        "root contract execution receipt did not succeed"
+    );
+    Ok(receipt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
     use std::io::{Read, Write};
+
+    #[test]
+    fn finalize_promise_return_selects_contract_receipt_instead_of_payout() {
+        let mut outcome: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/finalize-receipts.json")).unwrap();
+        let root = execution_receipt(&outcome, "s2.coord-wbts.testnet").unwrap();
+        assert_eq!(
+            root["id"],
+            outcome["transaction_outcome"]["outcome"]["receipt_ids"][0]
+        );
+        assert!(root["outcome"]["status"].get("SuccessReceiptId").is_some());
+        outcome["receipts_outcome"][0]["outcome"]["status"] = json!({"SuccessValue":""});
+        assert!(execution_receipt(&outcome, "s2.coord-wbts.testnet").is_ok());
+        outcome["receipts_outcome"][0]["outcome"]["executor_id"] = json!("unexpected.testnet");
+        assert!(execution_receipt(&outcome, "s2.coord-wbts.testnet").is_err());
+    }
 
     #[test]
     fn mainnet_rpc_is_rejected_before_signing_or_creating_journals() {
