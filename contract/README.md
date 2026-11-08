@@ -1,5 +1,22 @@
 # Contract status through 2.18
 
+## Local build and tests
+
+Use the [root prerequisites](../README.md#local-build-and-simulated-s2) and run
+these commands from the repository root, in order:
+
+```sh
+cargo near build non-reproducible-wasm --manifest-path contract/Cargo.toml --locked
+cargo test --manifest-path swarm-tests/Cargo.toml --locked --tests -- --test-threads=2
+```
+
+The first command builds the local WASM and ABI under `contract/target/near/`;
+it does not establish Docker/bit-for-bit reproducibility. The second builds the
+current contract source through cargo-near and runs all simulator integration
+tests, including the CLI engine's simulated S2. At the B1 source baseline there
+are 31 simulator tests (including six CLI-engine tests). Continue with the
+[CLI instructions](../cli/README.md#local-build-and-simulated-s2).
+
 The contract supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **persisted causal adjudication of direct T2 fee-split tasks**. `preview_adjudication` computes a verdict without changing state. Permissionless `adjudicate` persists that exact result once, without transfers or reputation effects. Unresolved challenged claims can expire Overturned through `resolve_expired`. `finalize` is the sole settlement path, after the original challenge deadline.
 
 ## Verification architecture and production direction

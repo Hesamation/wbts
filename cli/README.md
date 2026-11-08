@@ -1,12 +1,32 @@
 # Testnet CLI core
 
-Build with `cargo build --manifest-path cli/Cargo.toml --locked`. Run
-`cli/target/debug/cli --help` for `register`, `anchor`, `file-claim`, `challenge`
-and `run-demo`. Linux builds require the D-Bus development library (`dbus-1`
+## Local build and simulated S2
+
+After the [contract checks](../contract/README.md#local-build-and-tests), run
+these commands from the repository root with the [root prerequisites](../README.md#local-build-and-simulated-s2):
+
+```sh
+cargo build --manifest-path cli/Cargo.toml --locked
+cli/target/debug/cli --help
+cargo test --manifest-path cli/Cargo.toml --locked
+cargo test --manifest-path swarm-tests/Cargo.toml --test cli_core --locked
+cargo test --manifest-path swarm-tests/Cargo.toml --test cli_core --locked run_demo_s2_watcher_sponsors_exact_money_and_fresh_reputation_then_repeat -- --exact
+```
+
+The final command invokes the actual `run-demo s2` command engine using the
+in-process simulator and freshly built contract source. It checks the 2.18
+verifier PIN below, exact settlement and reputation on a fresh run, then a second
+run with persistent reputation. It needs no keys, funds or testnet connection.
+There is no standalone binary simulation flag. The standalone CLI suite has six
+tests; the `cli_core` simulator suite has six more (also included in the 31-test
+contract check). The focused S2 command reruns one of those six tests.
+
+The CLI provides `register`, `anchor`, `file-claim`, `challenge` and `run-demo`.
+Linux builds require the D-Bus development library (`dbus-1`
 via pkg-config) for the existing secure keystore. The lockfile pins CLI dependencies;
 contract dependencies are unchanged.
 
-## One-command S2
+## Live testnet S2 (outside local validation)
 
 ```sh
 cli/target/debug/cli --contract s218.worker-wbts.testnet \
@@ -134,10 +154,7 @@ are not implemented here.
 
 ## Validation
 
-```sh
-cargo test --manifest-path cli/Cargo.toml --locked
-cargo test --manifest-path swarm-tests/Cargo.toml --test cli_core --locked
-```
+Run the [local validation sequence](#local-build-and-simulated-s2) above.
 
 Simulator tests execute the actual CLI command engine against freshly built,
 unchanged contract source. They cover every command, three separate anchor
