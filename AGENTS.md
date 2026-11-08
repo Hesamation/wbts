@@ -8,9 +8,9 @@ decision in the handover:
 - If it involves money flow correctness → verify the math yourself before coding it.
 - If it cites a paper → verify the quote/number against the actual paper.
 - If it says "first" or "novel" → search for counterexamples before asserting.
-- If a number seems off → flag it in codex-log/, do not silently use it.
+- If a number seems off → flag it to the user; do not silently use it.
 - If you're unsure whether something is true → write "UNVERIFIED" in the code/README
-  and note it in STATUS.md. Never assert an unverified claim as fact.
+  and report it to the user. Never assert an unverified claim as fact.
 - The builder (human) wants rigor over speed. A flagged uncertainty is better than
   a false claim that a judge catches.
 - Source of truth order: (1) primary sources (papers, NEAR docs, explorer), (2)
@@ -53,7 +53,7 @@ swarms (primary) + business + security. Solo builder + Codex (ChatGPT Plus).
 - Rust 1.97.1, near-sdk 5.29.1, cargo-near 0.21.1 (0.22.0 is the fallback).
 - near-cli-rs latest; Node 22.12+; Docker for reproducible builds.
 - wasm32-unknown-unknown target required.
-- ACTUAL INSTALLED: Rust 1.99.1, cargo-near 0.23.0, near-cli-rs 0.30.1. Record actual versions in run log.
+- ACTUAL INSTALLED: Rust 1.99.1, cargo-near 0.23.0, near-cli-rs 0.30.1. Check actual versions when debugging or validating builds.
 
 ## Never-do (grep the repo before submitting)
 - Never write "first implementation" unqualified — only "First *on-NEAR* implementation
@@ -73,27 +73,21 @@ swarms (primary) + business + security. Solo builder + Codex (ChatGPT Plus).
 - No depth >2, multiple primes, or Intents integration.
 
 ## Working rules
-- One focused Codex prompt per work item; small diffs; builder reads each diff before
-  the next prompt.
-- Morning bursts only; check `/status` before every Codex burst.
+- Work with the builder directly through Codex; no other agents are assumed.
+- Keep each work item focused and diffs small. Summarize changes and validation for
+  builder review before starting another work item.
 - If a gate fails: STOP and report. Do not widen scope, re-prompt around a failed
   gate, or invent a workaround.
-- Source of truth order: (1) primary sources (papers, NEAR docs, explorer), (2)
-  morning-update-synthesis, (3) reframe-sharpening-addendum, (4) handover. The
-  handover is LAST. If it conflicts with a primary source, the primary source wins.
-- Every claim maps to an artifact. A claim without an artifact is a liability.
-
-## Role split
-- Builder: decisions, Gate-1 hand-run, README honesty by hand, video, submission.
-- Codex: Rust contract (one method/prompt), CLI, sim tests, toolchain debugging.
-- omp: research synthesis, red-teaming, docs/README drafting, verification, orchestration.
+- Every factual project claim must map to a supporting artifact.
+- No mandatory STATUS.md reads, shared-agent updates, or duplicate codex-log entries.
+  Record durable decisions or unresolved issues in relevant project documentation
+  when needed; report routine progress and validation in the conversation.
+- The builder owns scope decisions, Gate-1 hand-run, final review, video, and submission.
+  Codex handles implementation, tests, debugging, research, and documentation within
+  the authorized work item.
 
 ## Contract methods (pin before code)
 register / anchor / file_claim / challenge / adjudicate / finalize +
 resolve_panel (stub, documented no-op) / resolve_panel_with_vrf (design-only, no code) +
 views: verify_run, get_reputation, get_claim, get_run.
 
-## Shared collaboration
-- Read ../collab/STATUS.md first. Write updates there and to codex-log/.
-- Do not copy-paste prompts between agents; use the shared files.
-- Codex: be a critical thinker, not an executor. Flag uncertainties as "UNVERIFIED."
