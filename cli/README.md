@@ -9,16 +9,23 @@ contract dependencies are unchanged.
 ## One-command S2
 
 ```sh
-cli/target/debug/cli --contract s2.coord-wbts.testnet \
-  --rpc-url https://rpc.testnet.fastnear.com run-demo s2 \
-  --registrar watcher-wbts.testnet
+cli/target/debug/cli --contract s218.worker-wbts.testnet \
+  --rpc-url https://rpc.testnet.fastnear.com \
+  --storage-allowance 25000000000000000000000 run-demo s2 \
+  --registrar worker-wbts.testnet
 ```
 
 `--contract` (or `WBTS_CONTRACT`) is overridable. `--rpc-url` (or `WBTS_RPC_URL`)
 selects an RPC; the CLI checks `chain_id=testnet` at connection and before every
 signature. Only named `.testnet` accounts are accepted. There is no deployment path.
+For the 2.18 pin, pass the fresh contract explicitly as above; the historical
+default contract remains the 2.10 deployment and has a different identity.
 
-The recorded initial attempt on the default RPC stopped on HTTP 429. Claim 1 was
+The current 2.18 deployment and S2 proof are recorded in [the live log](../codex-log/2.18-live.md).
+Its initial attempt stopped before filing on insufficient maximum-gas funding;
+the fresh worker-sponsored run passed with the allowance shown above.
+
+The historical CLI-core attempt on the default RPC stopped on HTTP 429. Claim 1 was
 subsequently settled with builder approval through the alternate endpoint above.
 Read [the live log](../codex-log/cli-s2-live.md) and
 [recovery/funding evidence](../codex-log/cli-s2-recovery.md) before repeating runs.
