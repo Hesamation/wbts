@@ -152,3 +152,5 @@ views: verify_run, get_reputation, get_claim, get_run.
 - Historical proposals are not approvals. Current code and primary evidence establish facts; builder-confirmed decisions govern policy.
 
 - Keep codex-log/ and preimplementation notes local and ignored; never add them to Git or push them. Store preimplementation notes inside codex-log/.
+
+- Keep HACKATHON.md, STATUS.md and submission.json local and ignored; never commit or push them. Internal logs and preimplementation notes must also remain absent from repository history.

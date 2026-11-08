@@ -23,3 +23,8 @@ Thumbs.db
 # Local agent notes and evidence
 /codex-log/
 /*preimplementation*.md
+
+# Local event planning and submission metadata
+/HACKATHON.md
+/STATUS.md
+/submission.json
