@@ -150,3 +150,5 @@ views: verify_run, get_reputation, get_claim, get_run.
 - Keep status short and link evidence once. No new full diffs or build transcripts in codex-log/.
 - Search sections first and read relevant ranges. Warn before token-heavy research or bulk processing. Do not delegate without explicit authorization.
 - Historical proposals are not approvals. Current code and primary evidence establish facts; builder-confirmed decisions govern policy.
+
+- Keep codex-log/ and preimplementation notes local and ignored; never add them to Git or push them. Store preimplementation notes inside codex-log/.
