@@ -149,7 +149,12 @@ impl LogAnchor {
             is_hash(&verifier.task_spec_hash) && is_hash(&verifier.verifier_hash),
             "invalid verifier pin"
         );
-        if verifier.verifier_hash == t2::implementation_hash() {
+        assert_eq!(
+            verifier.verifier_hash,
+            t2::implementation_hash(),
+            "unsupported verifier implementation"
+        );
+        {
             let spec = task_spec
                 .as_ref()
                 .expect("embedded verifier requires task spec");
@@ -310,8 +315,9 @@ impl LogAnchor {
         let deposit = env::attached_deposit().as_yoctonear();
         assert!(deposit >= storage_cost, "insufficient storage deposit");
         if deposit > storage_cost {
-            let _refund = Promise::new(env::predecessor_account_id())
-                .transfer(NearToken::from_yoctonear(deposit - storage_cost));
+            Promise::new(env::predecessor_account_id())
+                .transfer(NearToken::from_yoctonear(deposit - storage_cost))
+                .detach();
         }
         head
     }

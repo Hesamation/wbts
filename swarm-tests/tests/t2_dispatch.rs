@@ -352,48 +352,32 @@ fn challenge_snapshot_includes_prior_defense_and_excludes_later_appends() {
 }
 
 #[test]
-fn matching_metadata_hash_is_not_an_executable_verifier() {
+fn unknown_verifier_registration_rejects_without_funding() {
     let mut r = Run::new(250);
-    let unknown = "ff".repeat(32);
+    for unknown in ["ff".repeat(32), {
+        let mut typo = r.verifier.clone();
+        typo.replace_range(0..1, if &typo[..1] == "0" { "1" } else { "0" });
+        typo
+    }] {
+        let rejected = r.sim.call("sponsor.near", CONTRACT, "register")
+            .args_json(json!({"run_id": "unknown", "agents": [COORD, WORKER],
+                "verifier": {"task_spec_hash": digest(&r.spec), "verifier_hash": unknown, "verifier_key": null},
+                "task_spec": STANDARD.encode(&r.spec)}))
+            .deposit(Balance::from_millinear(2050)).transact();
+        rejected.assert_panic_contains("unsupported verifier implementation");
+        assert_eq!(rejected.effects().near_net(CONTRACT), Delta::ZERO);
+        assert_eq!(
+            r.sim
+                .view(CONTRACT, "get_run", json!({"run_id": "unknown"}))
+                .json::<Value>(),
+            Value::Null
+        );
+    }
     r.sim.call("sponsor.near", CONTRACT, "register")
         .args_json(json!({"run_id": "unknown", "agents": [COORD, WORKER],
-            "verifier": {"task_spec_hash": digest(&r.spec), "verifier_hash": unknown, "verifier_key": null}}))
+            "verifier": {"task_spec_hash": digest(&r.spec), "verifier_hash": r.verifier, "verifier_key": null},
+            "task_spec": STANDARD.encode(&r.spec)}))
         .deposit(Balance::from_millinear(2050)).transact().assert_success();
-    let anchored = r
-        .sim
-        .call(COORD, CONTRACT, "anchor")
-        .args_json(
-            json!({"run_id": "unknown", "seq": 0, "actor": COORD, "kind": "task_assigned",
-            "payload_hash": digest(&input()), "prev_hash": ""}),
-        )
-        .deposit(Balance::from_millinear(20))
-        .transact();
-    anchored.assert_success();
-    let filed = r.sim.call(COORD, CONTRACT, "file_claim")
-        .args_json(json!({"run_id": "unknown", "blamed": WORKER, "failure_class": "F1", "verifier_hash": unknown,
-            "evidence_seqs": [0], "evidence_payload_hashes": [digest(&input())], "evidence_tx_hashes": [anchored.hash.to_string()]}))
-        .deposit(Balance::from_millinear(280)).transact();
-    filed.assert_success();
-    let id: u64 = filed.json();
-    r.challenge(id);
-    let before: Value = r
-        .sim
-        .view(CONTRACT, "get_claim", json!({"claim_id": id}))
-        .json();
-    r.sim
-        .view(
-            CONTRACT,
-            "preview_adjudication",
-            json!({"claim_id": id, "task_spec": STANDARD.encode(&r.spec),
-        "payloads": [{"seq": 0, "bytes": STANDARD.encode(input())}]}),
-        )
-        .assert_panic_contains("unsupported verifier implementation");
-    assert_eq!(
-        r.sim
-            .view(CONTRACT, "get_claim", json!({"claim_id": id}))
-            .json::<Value>(),
-        before
-    );
     r.sim.findings().assert_none();
 }
 

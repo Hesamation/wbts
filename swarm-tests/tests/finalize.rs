@@ -32,9 +32,13 @@ fn setup(demo: Option<bool>) -> (Sim, Value) {
         .args_json(demo.map_or_else(|| json!({}), |demo| json!({"demo": demo})))
         .transact()
         .assert_success();
+    let verifier: Value = sim
+        .view("anchor.near", "get_verifier_info", json!({}))
+        .json();
+    let verifier_hash = verifier["verifier_hash"].as_str().unwrap().to_owned();
     sim.call("creator.near", "anchor.near", "register")
         .args_json(
-            json!({"run_id": "gate1", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["creator.near", "worker.near", "reviewer.near"]}),
+            json!({"run_id": "gate1", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": ["creator.near", "worker.near", "reviewer.near"]}),
         )
         .deposit(Balance::from_millinear(3010))
         .transact()
@@ -54,7 +58,7 @@ fn setup(demo: Option<bool>) -> (Sim, Value) {
         let out = sim
             .call(actor, "anchor.near", "anchor")
             .args_json(json!({"run_id": "gate1", "seq": seq, "actor": actor,
-                "kind": kind, "payload_hash": payloads[seq], "prev_hash": head}))
+                "kind": kind, "task": if seq < 2 { json!({"assignment_seq": 0, "worker": "worker.near", "parent_assignment_seq": null}) } else { Value::Null }, "payload_hash": payloads[seq], "prev_hash": head}))
             .deposit(Balance::from_millinear(10))
             .transact();
         out.assert_success();
@@ -63,7 +67,7 @@ fn setup(demo: Option<bool>) -> (Sim, Value) {
     }
     (
         sim,
-        json!({"run_id": "gate1", "blamed": "worker.near", "failure_class": "F1", "verifier_hash": "11".repeat(32),
+        json!({"run_id": "gate1", "blamed": "worker.near", "failure_class": "F1", "verifier_hash": verifier_hash,
         "evidence_seqs": [0, 1, 2], "evidence_payload_hashes": payloads, "evidence_tx_hashes": hashes}),
     )
 }
@@ -233,8 +237,12 @@ fn production_default_and_no_cross_run_collateral() {
         assert_eq!(reputation(&sim), 100 - 10 * (index as u8 + 1));
     }
     assert_eq!(run(&sim, "gate1")["agents"][1]["locked_stake"], "0");
+    let verifier_hash = run(&sim, "gate1")["verifier"]["verifier_hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     sim.call("creator.near", "anchor.near", "register")
-        .args_json(json!({"run_id": "second", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["worker.near"]}))
+        .args_json(json!({"run_id": "second", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": ["worker.near"]}))
         .deposit(Balance::from_millinear(1010))
         .transact()
         .assert_success();

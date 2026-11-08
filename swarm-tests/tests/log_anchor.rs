@@ -26,18 +26,22 @@ fn registered_run_checks_and_storage_rollback() {
         .args_json(json!({}))
         .transact()
         .assert_success();
-    let registration = json!({"run_id": "gate1", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near", "bob.near", "carol.near"]});
+    let verifier: Value = sim
+        .view("anchor.near", "get_verifier_info", json!({}))
+        .json();
+    let verifier_hash = verifier["verifier_hash"].as_str().unwrap().to_owned();
+    let registration = json!({"run_id": "gate1", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": ["alice.near", "bob.near", "carol.near"]});
     for (args, message) in [
         (
-            json!({"run_id": "", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near"]}),
+            json!({"run_id": "", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": ["alice.near"]}),
             "run_id must not be empty",
         ),
         (
-            json!({"run_id": "empty", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": []}),
+            json!({"run_id": "empty", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": []}),
             "agents must not be empty",
         ),
         (
-            json!({"run_id": "duplicate", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near", "alice.near"]}),
+            json!({"run_id": "duplicate", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": ["alice.near", "alice.near"]}),
             "agents must be unique",
         ),
     ] {
@@ -108,7 +112,7 @@ fn registered_run_checks_and_storage_rollback() {
     );
     let event = |seq: u64, prev: &str| {
         json!({"run_id": "gate1", "seq": seq, "actor": "alice.near",
-            "kind": "task_assigned", "payload_hash": "ab".repeat(32), "prev_hash": prev})
+            "kind": "note", "payload_hash": "ab".repeat(32), "prev_hash": prev})
     };
     let mut unknown = event(0, "");
     unknown["run_id"] = json!("unregistered");
@@ -130,6 +134,20 @@ fn registered_run_checks_and_storage_rollback() {
         .deposit(Balance::from_millinear(10))
         .transact();
     first.assert_success();
+    let effects = first.effects();
+    let storage_cost = sim
+        .storage_cost(u64::try_from(effects.storage_bytes("anchor.near")).unwrap())
+        .as_yoctonear();
+    let excess = Balance::from_millinear(10).as_yoctonear() - storage_cost;
+    assert!(excess > 0);
+    assert_eq!(
+        effects
+            .near_paid("anchor.near", "alice.near")
+            .as_yoctonear(),
+        excess
+    );
+    assert_eq!(effects.near_net("anchor.near"), Delta::gain(storage_cost));
+    assert!(effects.pending.is_empty());
     let head: String = first.json();
     assert_eq!(head.len(), 64);
     let stored: Value = sim
@@ -199,7 +217,7 @@ fn registered_run_checks_and_storage_rollback() {
         .assert_panic_contains("unknown run");
     // A second run has its own head and collateral, rather than sharing state.
     sim.call("bob.near", "anchor.near", "register")
-        .args_json(json!({"run_id": "second", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["bob.near"]}))
+        .args_json(json!({"run_id": "second", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": ["bob.near"]}))
         .deposit(Balance::from_millinear(1010))
         .transact()
         .assert_success();

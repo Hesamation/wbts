@@ -23,8 +23,12 @@ fn pending_claim_bond_evidence_and_rollback() {
         .args_json(json!({}))
         .transact()
         .assert_success();
+    let verifier: Value = sim
+        .view("anchor.near", "get_verifier_info", json!({}))
+        .json();
+    let verifier_hash = verifier["verifier_hash"].as_str().unwrap().to_owned();
     sim.call("alice.near", "anchor.near", "register")
-        .args_json(json!({"run_id": "gate1", "verifier": {"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null}, "agents": ["alice.near", "bob.near", "carol.near"]}))
+        .args_json(json!({"run_id": "gate1", "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9", "verifier": {"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null}, "agents": ["alice.near", "bob.near", "carol.near"]}))
         .deposit(Balance::from_millinear(3010))
         .transact()
         .assert_success();
@@ -43,7 +47,7 @@ fn pending_claim_bond_evidence_and_rollback() {
         let anchored = sim
             .call(actor, "anchor.near", "anchor")
             .args_json(json!({"run_id": "gate1", "seq": seq, "actor": actor,
-                "kind": kind, "payload_hash": payload_hashes[seq], "prev_hash": head}))
+                "kind": kind, "task": if seq < 2 { json!({"assignment_seq": 0, "worker": "bob.near", "parent_assignment_seq": null}) } else { Value::Null }, "payload_hash": payload_hashes[seq], "prev_hash": head}))
             .deposit(Balance::from_millinear(10))
             .transact();
         anchored.assert_success();
@@ -51,7 +55,7 @@ fn pending_claim_bond_evidence_and_rollback() {
         // These are actual simulator transaction hashes, not testnet evidence.
         tx_hashes.push(anchored.hash.to_string());
     }
-    let args = json!({"run_id": "gate1", "blamed": "bob.near", "failure_class": "F1", "verifier_hash": "11".repeat(32),
+    let args = json!({"run_id": "gate1", "blamed": "bob.near", "failure_class": "F1", "verifier_hash": verifier_hash,
         "evidence_seqs": [0, 1, 2], "evidence_payload_hashes": payload_hashes,
         "evidence_tx_hashes": tx_hashes});
     let run_before: Value = sim
@@ -215,8 +219,11 @@ fn pending_claim_bond_evidence_and_rollback() {
     let pin: Value = sim
         .view("anchor.near", "get_run", json!({"run_id": "gate1"}))
         .json();
-    assert_eq!(pin["verifier"]["verifier_hash"], "11".repeat(32));
-    assert_eq!(pin["verifier"]["task_spec_hash"], "22".repeat(32));
+    assert_eq!(pin["verifier"]["verifier_hash"], verifier_hash);
+    assert_eq!(
+        pin["verifier"]["task_spec_hash"],
+        "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416"
+    );
     let params = json!({"stake": Balance::from_near(2).as_yoctonear().to_string(),
         "blame_bond": Balance::from_millinear(500).as_yoctonear().to_string(),
         "challenge_bond": Balance::from_millinear(500).as_yoctonear().to_string()});
@@ -291,9 +298,9 @@ fn pending_claim_bond_evidence_and_rollback() {
         .deposit(Balance::from_near(1))
         .transact()
         .assert_panic_contains("challenge window expired");
-    let verifier = json!({"task_spec_hash": "22".repeat(32), "verifier_hash": "11".repeat(32), "verifier_key": null});
+    let verifier = json!({"task_spec_hash": "9f49b7cffedde917676115cd3a4885f451bb5860ac593251c1da8598fc2a1416", "verifier_hash": verifier_hash, "verifier_key": null});
     sim.call("alice.near", "anchor.near", "register")
-        .args_json(json!({"run_id": "updated", "agents": ["bob.near"], "verifier": verifier}))
+        .args_json(json!({"run_id": "updated", "agents": ["bob.near"], "verifier": verifier, "task_spec": "eyJ0YXNrX3R5cGUiOiJ0Ml9mZWVfc3BsaXRfdjEiLCJmZWVfYmFzaXNfcG9pbnRzIjoyNTB9"}))
         .deposit(Balance::from_millinear(2010))
         .transact()
         .assert_success();
@@ -310,11 +317,11 @@ fn pending_claim_bond_evidence_and_rollback() {
         run_before
     );
     let anchored = sim.call("bob.near", "anchor.near", "anchor")
-        .args_json(json!({"run_id": "updated", "seq": 0, "actor": "bob.near", "kind": "settlement", "payload_hash": "ab".repeat(32), "prev_hash": ""}))
+        .args_json(json!({"run_id": "updated", "seq": 0, "actor": "bob.near", "kind": "task_assigned", "task": {"assignment_seq": 0, "worker": "bob.near", "parent_assignment_seq": null}, "payload_hash": "ab".repeat(32), "prev_hash": ""}))
         .deposit(Balance::from_millinear(10)).transact();
     anchored.assert_success();
     let new_claim = sim.call("alice.near", "anchor.near", "file_claim")
-        .args_json(json!({"run_id": "updated", "blamed": "bob.near", "failure_class": "F1", "verifier_hash": "11".repeat(32),
+        .args_json(json!({"run_id": "updated", "blamed": "bob.near", "failure_class": "F1", "verifier_hash": verifier_hash,
             "evidence_seqs": [0], "evidence_payload_hashes": ["ab".repeat(32)], "evidence_tx_hashes": [anchored.hash.to_string()]}))
         .deposit(Balance::from_millinear(520)).transact();
     new_claim.assert_success();

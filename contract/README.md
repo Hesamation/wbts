@@ -10,7 +10,7 @@ The demo uses fixed Rust verifier code inside the main contract, with JSON task 
 
 `get_verifier_info()` publishes the supported task type, bounds and `verifier_hash`. For this embedded implementation, the hash is SHA-256 of the domain `wbts/embedded-t2/source-manifest/v1` followed by a zero byte and four length-prefixed byte strings: `src/lib.rs`, `src/t2.rs`, `Cargo.toml`, `Cargo.lock`. Lengths are u64 little-endian. It fingerprints the source/dependency manifest; **it is not the deployed WASM hash or an execution attestation**. Reviewed build output and the full deployed-code hash must be checked separately. Main-contract deployment/upgrade control remains part of the demo's trust assumptions.
 
-A copied metadata hash cannot select arbitrary code: dispatch only executes the compiled-in implementation if the run and claim pins match its published identity. Other registered identities remain metadata-only and cannot produce a verdict. Any source/manifest change changes this identity, including unrelated source changes. Carrying old versions through upgrades is not implemented; do not upgrade a funded instance in place.
+A copied metadata hash cannot select arbitrary code: dispatch only executes the compiled-in implementation if the run and claim pins match its published identity. Registration rejects unknown identities before retaining stake or storage deposits; metadata-only registration is no longer supported (issue #4, builder-approved). Any source/manifest change changes this identity, including unrelated source changes. Carrying old versions through upgrades is not implemented; do not upgrade a funded instance in place.
 
 ## Task admission rule
 
