@@ -17,6 +17,16 @@ tests, including the CLI engine's simulated S2. At the B1 source baseline there
 are 31 simulator tests (including six CLI-engine tests). Continue with the
 [CLI instructions](../cli/README.md#local-build-and-simulated-s2).
 
+Run Clippy for the WASM contract target and all simulator test targets.
+Warnings are reported without failing the job; the existing contract has
+argument-count and needless-borrow warnings. This CI step does not certify
+warning-free code:
+
+```sh
+cargo clippy --manifest-path contract/Cargo.toml --locked --target wasm32-unknown-unknown
+cargo clippy --manifest-path swarm-tests/Cargo.toml --locked --all-targets
+```
+
 The contract supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **persisted causal adjudication of direct T2 fee-split tasks**. `preview_adjudication` computes a verdict without changing state. Permissionless `adjudicate` persists that exact result once, without transfers or reputation effects. Unresolved challenged claims can expire Overturned through `resolve_expired`. `finalize` is the sole settlement path, after the original challenge deadline.
 
 ## Verification architecture and production direction

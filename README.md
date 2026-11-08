@@ -35,10 +35,27 @@ clang, cmake, pkgconf, openssl and dbus. Debian/Ubuntu package names include bui
 clang, libclang-dev, cmake, pkg-config, libssl-dev and libdbus-1-dev. Dependency downloads require
 network access. No NEAR keys, account funding or testnet RPC are needed.
 
+For Ubuntu (including the CI runner), install the native prerequisites and the
+B1-tested tools with these commands. Rustup must already be installed. The
+`rustup default` command selects this version for subsequent Cargo commands,
+including nested simulator builds. Cargo-near installation keeps its published
+lockfile; repository builds keep the committed lockfiles.
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential clang libclang-dev cmake pkg-config libssl-dev libdbus-1-dev
+rustup toolchain install 1.99.1 --profile minimal --component clippy --target wasm32-unknown-unknown
+rustup default 1.99.1
+cargo install cargo-near --version 0.23.0 --locked
+```
+
+The Debian/Ubuntu package mapping is pending confirmation on GitHub Actions;
+B1 validated the equivalent prerequisites on Arch Linux.
+
 Check the installed tools, then follow [contract build and simulator tests](contract/README.md#local-build-and-tests)
 and [CLI build, tests and simulated S2](cli/README.md#local-build-and-simulated-s2),
-in that order. Those blocks are the local validation command sequence for future CI;
-CI is not installed yet. The live testnet and individual-command examples are
+in that order. The two jobs in [CI](.github/workflows/ci.yml) mirror these
+README commands, including the Clippy commands below. The live testnet and individual-command examples are
 separate, credentialed operations and are not part of this path.
 
 ```sh
@@ -51,6 +68,9 @@ export CARGO_BUILD_JOBS=2
 ```
 
 The job limit also applies to the contract builds launched by simulator tests.
+CI sets `CARGO_BUILD_JOBS=2` at workflow scope, equivalent to the export above.
+CI runs on pushes and pull requests targeting `codex/align-agents-20261108`;
+it uses no NEAR credentials or testnet calls.
 
 ## License
 TBD (any license allowed by hackathon rules).

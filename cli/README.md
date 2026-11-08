@@ -26,6 +26,12 @@ Linux builds require the D-Bus development library (`dbus-1`
 via pkg-config) for the existing secure keystore. The lockfile pins CLI dependencies;
 contract dependencies are unchanged.
 
+Run Clippy for all standalone CLI targets:
+
+```sh
+cargo clippy --manifest-path cli/Cargo.toml --locked --all-targets
+```
+
 ## Live testnet S2 (outside local validation)
 
 ```sh
