@@ -144,6 +144,7 @@ resolve_panel (stub, documented no-op) / resolve_panel_with_vrf (design-only, no
 views: verify_run, get_reputation, get_claim, get_run.
 
 ## Current workflow
+- Develop in the root `wbts/` checkout on `master`; commit and push routine work there. Use temporary branches/worktrees only for a concrete need, then integrate and remove them after preserving any remaining edits or evidence.
 - Start with STATUS.md and ../project/STATUS.md. The collab workflow is retired.
 - Maximize P(win); essential strategy, scope, financial and submission decisions belong to the builder. Routine implementation choices do not require a new approval.
 - Keep status short and link evidence once. No new full diffs or build transcripts in codex-log/.
