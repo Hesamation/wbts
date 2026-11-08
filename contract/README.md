@@ -1,6 +1,6 @@
-# Contract status through 2.9
+# Contract status through 2.10
 
-The contract supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **persisted causal adjudication of direct T2 fee-split tasks**. `preview_adjudication` computes a verdict without changing state. Permissionless `adjudicate` persists that exact result once, without transfers or reputation effects. Challenged-claim payouts remain 2.10; only the earlier unchallenged `finalize` path is implemented.
+The contract supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **persisted causal adjudication of direct T2 fee-split tasks**. `preview_adjudication` computes a verdict without changing state. Permissionless `adjudicate` persists that exact result once, without transfers or reputation effects. `finalize` settles unchallenged and adjudicated claims after the original deadline.
 
 ## Verification architecture and production direction
 
@@ -83,7 +83,7 @@ If a completion exists in the snapshot, both payloads are required, including wh
 
 Anyone may call after challenge, including after the challenge deadline; there is no separate adjudication deadline. Subsequent decodable calls return the stored result without rechecking evidence or writing state. SDK JSON/type and nonpayable-deposit checks still apply. Preview itself continues to require Challenged status; read the persisted result through `get_claim` afterward.
 
-Adjudication consumes the challenger-funded padding, preserving the serialized claim length and asserting unchanged flushed storage usage. It accepts no deposit, sends no transfers, and changes no stakes, bonds, treasury or reputation; its caller pays gas. Unused padding remains paid physical storage, with no deletion/refund policy added here. Both bonds remain locked, and the existing finalize guard still rejects adjudicated claims until 2.10. A missing or unauthenticatable evidence submission stays Challenged and may be retried.
+Adjudication consumes the challenger-funded padding, preserving the serialized claim length and asserting unchanged flushed storage usage. It accepts no deposit, sends no transfers, and changes no stakes, bonds, treasury or reputation; its caller pays gas. Unused padding remains paid physical storage, with no deletion/refund policy added here. Both bonds remain locked until finalize. A missing or unauthenticatable evidence submission stays Challenged and may be retried.
 
 ## Causal result and scope boundary
 
@@ -111,10 +111,44 @@ Hashes may commit to off-chain bytes that later exceed these bounds or become un
 
 ## Remaining state and work
 
-`new(demo?)` assigns the initializing predecessor as owner; default S=1 NEAR, B=C=0.25 NEAR; default window 600 blocks, explicit demo=true selects 60. `update_parameters` is owner-only; existing stakes and filed bonds do not change. New claims use current B; challenges match the filed bond. S must cover the fixed 0.25 slash and B=C>0. These adjustable amounts do not justify extending default economic thresholds to arbitrary settings.
+`new(demo?)` assigns the initializing predecessor as owner; default S=1 NEAR, B=C=0.25 NEAR; default window 600 blocks, explicit demo=true selects 60. `update_parameters` is owner-only; existing stakes and filed bonds do not change. New claims use current B; challenges match the filed bond. The current parameter setter requires S >= 0.25 and B=C>0; settlement uses the filed bond and caps stake slashing at the remaining run stake. These adjustable amounts do not justify extending default economic thresholds to arbitrary settings.
 
-Registration, filing and challenge fund their measured storage separately from principal and refund excess. Remaining stakes stay locked. Failed reporter-payout recovery is unimplemented. Preview leaves claims Challenged; adjudicate persists their decision, while challenged payouts remain unimplemented until 2.10.
+Registration, filing and challenge fund their measured storage separately from principal and refund excess. Remaining stakes stay locked. Failed-payout recovery is unimplemented. Preview leaves claims Challenged; adjudicate persists their decision; finalize settles after the window.
 
 Eligibility currently permits self-claims and challenges by any account, including the reporter and blamed agent. Blamed-agent self-challenge is an intended defense. Reporter self-challenge is also admitted; there is no timeout or recovery for unresolved challenged claims in this slice. This remains a lifecycle limitation to review when implementing resolution, rather than an established safe self-dealing policy. `get_reputation` returns the baseline 100 for an unknown account; that value does not prove registration or participation.
 
 Parked: T1/T3 verifiers, F2 with RECV/timeout evidence, F4 attribution, F5a composition, nested-delegation verification, production separate-verifier dispatch, and chunked evidence upload. These are not silently counted as supported. Current state/event/claim layouts require a fresh deployment; there is no migration. The funded Gate-1 deployment and its evidence remain untouched.
+
+### Finalization settlement (2.10)
+
+`finalize(claim_id)` accepts Pending, AdjudicatedUpheld and AdjudicatedOverturned
+only when height > challenge_deadline. Challenged rejects; Finalized replay is a
+no-op. Pending acceptance does not establish truth: an unchallenged false claim
+has exactly the same consequences as an unchallenged true claim.
+
+Let B be the filed bond, C the recorded challenge bond, and s=min(B, remaining
+run stake). Each reward is floor(4 * slashed / 5), with the remainder retained
+as treasury; returned bond principal is additional to the reward.
+
+| Input | Slashed | Payout | Reputation |
+|---|---|---|---|
+| Pending | s from blamed stake | reporter: B + reward(s) | blamed -10 |
+| Upheld | s from stake plus full C | reporter: B + reward(s+C) | blamed -10 |
+| Overturned | B from reporter bond; stake unchanged | challenger: C + reward(B) | reporter -15; challenger +5/run; blamed +2 |
+
+Principal conservation: Pending B+s=payout+treasury; upheld B+s+C=payout+treasury;
+overturned B+C=payout+treasury. Both stored bonds become zero. Empty stake still
+finalizes, with the reputation penalty; upheld still consumes C in full.
+
+Overturned reputation applies reporter penalty, challenger bonus, then blamed
+exoneration, reading each latest score with floor 0/cap 120. Roles may overlap:
+worker self-challenge gains +7 from 100; watcher challenge gives watcher +5 and
+worker +2. A corrected culprit gets no additional penalty without a fresh claim,
+but still receives any independent reporter penalty (S6 coordinator -15).
+
+Missing reporter reputation is funded at filing; missing challenger reputation
+and a per-(run, challenger) bonus marker are funded at challenge, separately from
+bonds. First overturned win consumes the entitlement even if cap 120 clips it.
+Existing scores/markers are preserved; finalization asserts zero storage growth.
+A new contract-state map requires fresh initialization; do not upgrade Gate-1.
+Transfers are separate receipts; failed-payout recovery remains unimplemented.

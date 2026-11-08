@@ -1,6 +1,6 @@
 //! Gate-1 registered run logs with creator-funded participation stakes.
 //! Challenged direct T2 tasks support persisted causal adjudication. Challenged
-//! payouts and releasing participation stakes are later work items.
+//! payouts settle at finalize; releasing participation stakes is later work.
 
 pub mod t2;
 
@@ -117,6 +117,7 @@ pub struct LogAnchor {
     challenge_window_blocks: u64,
     reputations: LookupMap<AccountId, u8>,
     treasury_balance: U128,
+    challenge_bonus_consumed: LookupMap<(String, AccountId), bool>,
 }
 
 #[near]
@@ -136,6 +137,7 @@ impl LogAnchor {
             challenge_window_blocks: if demo.unwrap_or(false) { 60 } else { 600 },
             reputations: LookupMap::new(b"p"),
             treasury_balance: U128(0),
+            challenge_bonus_consumed: LookupMap::new(b"b"),
         }
     }
 
@@ -453,6 +455,11 @@ impl LogAnchor {
             .checked_add(self.challenge_window_blocks)
             .expect("challenge deadline overflow");
         let storage_before = env::storage_usage();
+        let reporter = env::predecessor_account_id();
+        if !self.reputations.contains_key(&reporter) {
+            self.reputations.insert(reporter, 100);
+        }
+        self.reputations.flush();
         self.claims.insert(
             claim_id,
             Claim {
@@ -529,7 +536,17 @@ impl LogAnchor {
         );
         let storage_before = env::storage_usage();
         let bond = claim.bond.0;
-        claim.challenger = Some(env::predecessor_account_id());
+        let challenger = env::predecessor_account_id();
+        if !self.reputations.contains_key(&challenger) {
+            self.reputations.insert(challenger.clone(), 100);
+        }
+        let bonus_key = (claim.run_id.clone(), challenger.clone());
+        if !self.challenge_bonus_consumed.contains_key(&bonus_key) {
+            self.challenge_bonus_consumed.insert(bonus_key, false);
+        }
+        self.reputations.flush();
+        self.challenge_bonus_consumed.flush();
+        claim.challenger = Some(challenger);
         claim.challenge_bond = U128(bond);
         claim.status = ClaimStatus::Challenged;
         let log = self.runs.get(&claim.run_id).expect("unknown run");
@@ -787,58 +804,103 @@ impl LogAnchor {
         }
     }
 
-    /// Accept an unchallenged claim once height > its recorded deadline.
-    /// This optimistic acceptance does not establish that the allegation is true.
-    /// Repeated finalization is a no-op. Remaining participation stakes stay locked.
+    /// Settle an accepted optimistic claim or persisted adjudication after its window.
+    /// Pending acceptance does not prove truth. Replays do nothing; stakes stay locked.
     pub fn finalize(&mut self, claim_id: u64) {
         let mut claim = self.claims.get(&claim_id).cloned().expect("unknown claim");
         if matches!(claim.status, ClaimStatus::Finalized) {
             return;
         }
-        assert!(claim.challenger.is_none(), "claim must be unchallenged");
+        assert!(
+            matches!(
+                claim.status,
+                ClaimStatus::Pending
+                    | ClaimStatus::AdjudicatedUpheld
+                    | ClaimStatus::AdjudicatedOverturned
+            ),
+            "claim is not ready to finalize"
+        );
         assert!(
             env::block_height() > claim.challenge_deadline,
             "challenge window still open"
         );
-        let slash = NearToken::from_millinear(250).as_yoctonear();
-        let reward = slash * 4 / 5;
-        let treasury_share = slash - reward;
-        let payout = claim.bond.0.checked_add(reward).expect("payout overflow");
-        let reputation = self
-            .reputations
-            .get(&claim.blamed)
-            .copied()
-            .expect("missing registered reputation");
-        let log = self.runs.get_mut(&claim.run_id).expect("unknown run");
-        let agent = log
-            .agents
-            .iter_mut()
-            .find(|agent| agent.account_id == claim.blamed)
-            .expect("blamed must be registered agent");
-        agent.locked_stake.0 = agent
-            .locked_stake
-            .0
-            .checked_sub(slash)
-            .expect("insufficient locked stake");
+        let storage_before = env::storage_usage();
+        let (recipient, principal, slashed) =
+            if matches!(claim.status, ClaimStatus::AdjudicatedOverturned) {
+                let challenger = claim.challenger.clone().expect("missing challenger");
+                // Read each role's latest score: identities may overlap.
+                let rep = self
+                    .reputations
+                    .get_mut(&claim.reporter)
+                    .expect("missing reporter reputation");
+                *rep = rep.saturating_sub(15);
+                let consumed = self
+                    .challenge_bonus_consumed
+                    .get_mut(&(claim.run_id.clone(), challenger.clone()))
+                    .expect("missing funded bonus marker");
+                if !*consumed {
+                    *consumed = true; // entitlement consumed even when the score cap clips it
+                    let rep = self
+                        .reputations
+                        .get_mut(&challenger)
+                        .expect("missing challenger reputation");
+                    *rep = rep.saturating_add(5).min(120);
+                }
+                let rep = self
+                    .reputations
+                    .get_mut(&claim.blamed)
+                    .expect("missing blamed reputation");
+                *rep = rep.saturating_add(2).min(120);
+                (challenger, claim.challenge_bond.0, claim.bond.0)
+            } else {
+                let log = self.runs.get_mut(&claim.run_id).expect("unknown run");
+                let agent = log
+                    .agents
+                    .iter_mut()
+                    .find(|agent| agent.account_id == claim.blamed)
+                    .expect("blamed must be registered agent");
+                let slash = claim.bond.0.min(agent.locked_stake.0);
+                agent.locked_stake.0 -= slash;
+                let rep = self
+                    .reputations
+                    .get_mut(&claim.blamed)
+                    .expect("missing blamed reputation");
+                *rep = rep.saturating_sub(10);
+                let challenger_slash = if matches!(claim.status, ClaimStatus::AdjudicatedUpheld) {
+                    claim.challenge_bond.0
+                } else {
+                    0
+                };
+                (
+                    claim.reporter.clone(),
+                    claim.bond.0,
+                    slash.checked_add(challenger_slash).expect("slash overflow"),
+                )
+            };
+        // floor(4*x/5), without overflowing the intermediate multiplication.
+        let reward = (slashed / 5) * 4 + ((slashed % 5) * 4) / 5;
+        let treasury_share = slashed - reward;
+        let payout = principal.checked_add(reward).expect("payout overflow");
         self.treasury_balance.0 = self
             .treasury_balance
             .0
             .checked_add(treasury_share)
             .expect("treasury overflow");
-        self.reputations
-            .insert(claim.blamed.clone(), reputation.saturating_sub(10));
         claim.status = ClaimStatus::Finalized;
         claim.bond = U128(0);
-        let reporter = claim.reporter.clone();
+        claim.challenge_bond = U128(0);
         self.claims.insert(claim_id, claim);
-        // All storage fields updated here have fixed serialized sizes. Claim
-        // storage and reputation creation were funded at filing/registration.
         self.runs.flush();
         self.claims.flush();
         self.reputations.flush();
-        // Propagate the transfer outcome to the caller. State changes and the
-        // later transfer are separate receipts; the live proof must check both.
-        Promise::new(reporter)
+        self.challenge_bonus_consumed.flush();
+        assert_eq!(
+            env::storage_usage(),
+            storage_before,
+            "finalize storage changed"
+        );
+        // State and transfer settle in separate receipts; failed-payout recovery is deferred.
+        Promise::new(recipient)
             .transfer(NearToken::from_yoctonear(payout))
             .as_return()
             .detach();

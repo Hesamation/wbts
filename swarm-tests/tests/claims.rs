@@ -288,7 +288,7 @@ fn pending_claim_bond_evidence_and_rollback() {
     sim.call("carol.near", "anchor.near", "finalize")
         .args_json(json!({"claim_id": 0}))
         .transact()
-        .assert_panic_contains("claim must be unchallenged");
+        .assert_panic_contains("claim is not ready to finalize");
     let late: Value = sim
         .view("anchor.near", "get_claim", json!({"claim_id": 1}))
         .json();

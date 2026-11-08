@@ -247,15 +247,18 @@ fn production_default_and_no_cross_run_collateral() {
         .transact()
         .assert_success();
     assert_eq!(reputation(&sim), 60); // registration must preserve existing scores
-    let before = claim(&sim, ids[4]);
-    let failed = sim
+    let finalized = sim
         .call("finalizer.near", "anchor.near", "finalize")
         .args_json(json!({"claim_id": ids[4]}))
         .transact();
-    failed.assert_panic_contains("insufficient locked stake");
-    assert_eq!(failed.effects().near_net("anchor.near"), Delta::ZERO);
-    assert_eq!(claim(&sim, ids[4]), before);
-    assert_eq!(reputation(&sim), 60);
+    finalized.assert_success();
+    assert_eq!(
+        finalized.effects().near_paid("anchor.near", "creator.near"),
+        Balance::from_millinear(250)
+    );
+    assert_eq!(finalized.effects().storage_bytes("anchor.near"), 0);
+    assert_eq!(claim(&sim, ids[4])["status"], "Finalized");
+    assert_eq!(reputation(&sim), 50);
     assert_eq!(
         run(&sim, "second")["agents"][0]["locked_stake"],
         Balance::from_near(1).as_yoctonear().to_string()

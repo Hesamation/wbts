@@ -127,9 +127,13 @@ impl Run {
     }
 
     fn file(&mut self, assignment: u64, blamed: &str, class: &str) -> u64 {
+        self.file_as(COORD, assignment, blamed, class)
+    }
+
+    fn file_as(&mut self, reporter: &str, assignment: u64, blamed: &str, class: &str) -> u64 {
         let out = self
             .sim
-            .call(COORD, CONTRACT, "file_claim")
+            .call(reporter, CONTRACT, "file_claim")
             .args_json(
                 json!({"run_id": "t2", "blamed": blamed, "failure_class": class,
                 "verifier_hash": self.verifier, "evidence_seqs": [assignment],
@@ -756,7 +760,7 @@ fn persisted_causal_verdicts_permissionless_and_replay() {
             .call(WORKER, CONTRACT, "finalize")
             .args_json(json!({"claim_id": id}))
             .transact()
-            .assert_panic_contains("claim must be unchallenged");
+            .assert_panic_contains("challenge window still open");
         r.sim
             .call(WORKER, CONTRACT, "challenge")
             .args_json(json!({"claim_id": id}))
@@ -845,7 +849,22 @@ fn challenge_funds_result_slot_and_adjudication_state_boundaries() {
     );
     let funded = r.state(id);
     assert_eq!(funded["claim"]["challenge_bond"], before["claim"]["bond"]);
-    // Same schema/snapshot/caller widths let a new claim be funded exactly.
+    // A repeated challenger reuses its prepaid per-run marker, so measure the
+    // smaller repeated-call storage charge before checking exact funding.
+    let warm_id = r.file(root, WORKER, "F1");
+    let warm = r
+        .sim
+        .call(WORKER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id":warm_id}))
+        .deposit(Balance::from_millinear(270))
+        .transact();
+    warm.assert_success();
+    let repeated_storage = r
+        .sim
+        .storage_cost(u64::try_from(warm.effects().storage_bytes(CONTRACT)).unwrap())
+        .as_yoctonear();
+    assert!(repeated_storage < storage);
+    let required = Balance::from_millinear(250).as_yoctonear() + repeated_storage;
     let exact_id = r.file(root, WORKER, "F1");
     let exact = r
         .sim
@@ -922,14 +941,14 @@ fn bounded_evidence_and_100_event_wasm_gas_measurement() {
         "attached_gas": 100_000_000_000_000u64});
     std::fs::write(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../codex-log/2.9-preview-stress.json"),
+            .join("../codex-log/2.10-preview-stress.json"),
         serde_json::to_vec_pretty(&metrics).unwrap(),
     )
     .unwrap();
     let published: Value = r.sim.view(CONTRACT, "get_verifier_info", json!({})).json();
     std::fs::write(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../codex-log/2.9-verifier-info.json"),
+            .join("../codex-log/2.10-verifier-info.json"),
         serde_json::to_vec_pretty(&published).unwrap(),
     )
     .unwrap();
@@ -971,7 +990,7 @@ fn bounded_evidence_and_100_event_wasm_gas_measurement() {
         json!(persisted.effects().gas_paid().as_yoctonear().to_string());
     persisted_metrics["storage_delta_bytes"] = json!(persisted.effects().storage_bytes(CONTRACT));
     std::fs::write(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../codex-log/2.9-sim-gas.json"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../codex-log/2.10-sim-gas.json"),
         serde_json::to_vec_pretty(&persisted_metrics).unwrap(),
     )
     .unwrap();
@@ -991,4 +1010,419 @@ fn bounded_evidence_and_100_event_wasm_gas_measurement() {
         .deposit(Balance::from_millinear(20)).transact();
     out.assert_panic_contains("embedded verifier event limit reached");
     r.sim.findings().assert_none();
+}
+
+fn amount(v: &Value) -> u128 {
+    v.as_str().unwrap().parse().unwrap()
+}
+fn rep(r: &Run, who: &str) -> u8 {
+    r.sim
+        .view(CONTRACT, "get_reputation", json!({"agent": who}))
+        .json()
+}
+fn finalize_checked(
+    r: &mut Run,
+    id: u64,
+    recipient: &str,
+    payout: u128,
+    treasury_gain: u128,
+    stake_loss: u128,
+) {
+    let before = r.state(id);
+    let stakes = |run: &Value| -> u128 {
+        run["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| amount(&a["locked_stake"]))
+            .sum()
+    };
+    let old_stakes = stakes(&before["run"]);
+    let balance = r.sim.balance(recipient).as_yoctonear();
+    let deadline = before["claim"]["challenge_deadline"].as_u64().unwrap();
+    r.sim.advance_to(deadline + 1);
+    // sponsor is distinct from all payout roles in these fixtures, isolating gas.
+    let out = r
+        .sim
+        .call("sponsor.near", CONTRACT, "finalize")
+        .args_json(json!({"claim_id": id}))
+        .transact();
+    out.assert_success();
+    let effects = out.effects();
+    assert_eq!(
+        effects.near_paid(CONTRACT, recipient).as_yoctonear(),
+        payout
+    );
+    assert_eq!(effects.near_net(CONTRACT), Delta::loss(payout));
+    for who in [COORD, WORKER, REVIEWER, CALLER, "sponsor.near"] {
+        if who != recipient {
+            assert_eq!(effects.near_net(who), Delta::ZERO);
+        }
+    }
+    assert_eq!(effects.near_net(recipient), Delta::gain(payout));
+    assert_eq!(r.sim.balance(recipient).as_yoctonear(), balance + payout);
+    assert_eq!(effects.storage_bytes(CONTRACT), 0);
+    assert_eq!(effects.near.len(), 1);
+    assert!(effects.pending.is_empty());
+    let after = r.state(id);
+    assert_eq!(after["claim"]["status"], "Finalized");
+    assert_eq!(after["claim"]["bond"], "0");
+    assert_eq!(after["claim"]["challenge_bond"], "0");
+    assert_eq!(old_stakes - stakes(&after["run"]), stake_loss);
+    assert_eq!(
+        amount(&after["treasury"]) - amount(&before["treasury"]),
+        treasury_gain
+    );
+    assert_eq!(
+        amount(&before["claim"]["bond"]) + amount(&before["claim"]["challenge_bond"]) + stake_loss,
+        payout + treasury_gain
+    );
+    assert_eq!(before["run"]["events"], after["run"]["events"]);
+    assert_eq!(
+        before["claim"]["adjudication_result"],
+        after["claim"]["adjudication_result"]
+    );
+    let scores: Vec<_> = [COORD, WORKER, REVIEWER, CALLER]
+        .map(|a| rep(r, a))
+        .to_vec();
+    let replay = r
+        .sim
+        .call(CALLER, CONTRACT, "finalize")
+        .args_json(json!({"claim_id": id}))
+        .transact();
+    replay.assert_success();
+    assert!(replay.effects().near.is_empty());
+    assert_eq!(replay.effects().storage_bytes(CONTRACT), 0);
+    assert_eq!(r.state(id), after);
+    assert_eq!(
+        [COORD, WORKER, REVIEWER, CALLER]
+            .map(|a| rep(r, a))
+            .to_vec(),
+        scores
+    );
+    r.sim.findings().assert_none();
+}
+
+#[test]
+fn finalize_four_cases_s2_s5_s6_and_overlapping_roles() {
+    let n = Balance::from_near(1).as_yoctonear();
+    // input valid, output valid, blamed, reporter, challenger, expected scores C/W/R/caller.
+    for (valid_input, valid_output, blamed, reporter, challenger, expected) in [
+        (true, false, WORKER, COORD, None, [100, 90, 100, 100]), // case 1
+        (true, true, WORKER, COORD, None, [100, 90, 100, 100]),  // case 4
+        (
+            true,
+            false,
+            WORKER,
+            COORD,
+            Some(REVIEWER),
+            [100, 90, 100, 100],
+        ), // case 2
+        (
+            false,
+            true,
+            COORD,
+            COORD,
+            Some(REVIEWER),
+            [90, 100, 100, 100],
+        ), // S5
+        (
+            true,
+            true,
+            WORKER,
+            COORD,
+            Some(REVIEWER),
+            [85, 102, 105, 100],
+        ), // S2 watcher
+        (true, true, WORKER, COORD, Some(WORKER), [85, 107, 100, 100]), // S2 self
+        (
+            false,
+            false,
+            WORKER,
+            COORD,
+            Some(REVIEWER),
+            [85, 102, 105, 100],
+        ), // S6 watcher, U8
+        (
+            false,
+            false,
+            WORKER,
+            COORD,
+            Some(WORKER),
+            [85, 107, 100, 100],
+        ), // S6 self
+        (
+            true,
+            true,
+            WORKER,
+            CALLER,
+            Some(REVIEWER),
+            [100, 102, 105, 85],
+        ), // outsider reporter
+        (true, true, WORKER, COORD, Some(CALLER), [85, 102, 100, 105]), // outsider challenger
+        (true, true, WORKER, COORD, Some(COORD), [90, 102, 100, 100]), // reporter=challenger
+        (
+            true,
+            true,
+            WORKER,
+            WORKER,
+            Some(WORKER),
+            [100, 92, 100, 100],
+        ), // all roles equal
+    ] {
+        let mut r = Run::new(250);
+        let root = r.assign(
+            WORKER,
+            &if valid_input {
+                input()
+            } else {
+                b"malformed".to_vec()
+            },
+        );
+        let done = r.complete(
+            root,
+            WORKER,
+            if valid_output { passing() } else { b"wrong" },
+        );
+        let class = if blamed == COORD { "F3" } else { "F1" };
+        let id = r.file_as(reporter, root, blamed, class);
+        let mut upheld = true;
+        if let Some(challenger) = challenger {
+            r.sim
+                .call(challenger, CONTRACT, "challenge")
+                .args_json(json!({"claim_id":id}))
+                .deposit(Balance::from_millinear(280))
+                .transact()
+                .assert_success();
+            let frozen = r.state(id);
+            let reject = r
+                .sim
+                .call(CALLER, CONTRACT, "finalize")
+                .args_json(json!({"claim_id":id}))
+                .transact();
+            reject.assert_panic_contains("claim is not ready to finalize");
+            assert_eq!(r.state(id), frozen);
+            let result = r.persist(id, &[root, done]);
+            upheld = result["verdict"] == "Upheld";
+        }
+        let frozen = r.state(id);
+        let early = r
+            .sim
+            .call(CALLER, CONTRACT, "finalize")
+            .args_json(json!({"claim_id":id}))
+            .transact();
+        early.assert_panic_contains("challenge window still open");
+        assert_eq!(r.state(id), frozen);
+        let (receiver, payout, treasury, slash) = if challenger.is_none() {
+            (reporter, 45 * n / 100, 5 * n / 100, n / 4)
+        } else if upheld {
+            (reporter, 65 * n / 100, n / 10, n / 4)
+        } else {
+            (challenger.unwrap(), 45 * n / 100, 5 * n / 100, 0)
+        };
+        finalize_checked(&mut r, id, receiver, payout, treasury, slash);
+        assert_eq!(
+            [COORD, WORKER, REVIEWER, CALLER].map(|a| rep(&r, a)),
+            expected
+        );
+    }
+}
+
+#[test]
+fn finalize_stake_exhaustion_cap_and_partial_upheld() {
+    let n = Balance::from_near(1).as_yoctonear();
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, b"wrong");
+    // Partial remaining stake uses the filed bond, despite later parameter changes.
+    r.sim.call("sponsor.near",CONTRACT,"update_parameters").args_json(json!({"stake": n.to_string(),"blame_bond":(3*n/10).to_string(),"challenge_bond":(3*n/10).to_string()})).transact().assert_success();
+    for i in 0..5 {
+        // Larger deposit for the 0.30 bond.
+        let id: u64 = r.sim.call(COORD,CONTRACT,"file_claim").args_json(json!({"run_id":"t2","blamed":WORKER,"failure_class":"F1","verifier_hash":r.verifier,"evidence_seqs":[root],"evidence_payload_hashes":[digest(&r.bodies[&root])],"evidence_tx_hashes":[r.transactions[&root]]})).deposit(Balance::from_millinear(350)).transact().json();
+        let s = if i < 3 {
+            3 * n / 10
+        } else if i == 3 {
+            n / 10
+        } else {
+            0
+        };
+        if i == 3 {
+            r.sim
+                .call(REVIEWER, CONTRACT, "challenge")
+                .args_json(json!({"claim_id":id}))
+                .deposit(Balance::from_millinear(350))
+                .transact()
+                .assert_success();
+            r.persist(id, &[root, done]);
+            finalize_checked(&mut r, id, COORD, 62 * n / 100, 8 * n / 100, s);
+        } else {
+            finalize_checked(&mut r, id, COORD, 3 * n / 10 + s * 4 / 5, s / 5, s);
+        }
+    }
+    assert_eq!(rep(&r, WORKER), 50);
+    // Exhausted stake still consumes the full challenger bond on upheld.
+    r.sim.call("sponsor.near",CONTRACT,"update_parameters").args_json(json!({"stake":n.to_string(),"blame_bond":(n/4).to_string(),"challenge_bond":(n/4).to_string()})).transact().assert_success();
+    let id = r.file(root, WORKER, "F1");
+    r.challenge(id);
+    r.persist(id, &[root, done]);
+    finalize_checked(&mut r, id, COORD, 45 * n / 100, 5 * n / 100, 0);
+    assert_eq!(rep(&r, WORKER), 40);
+}
+
+#[test]
+fn finalize_bonus_cap_and_reputation_saturation() {
+    let n = Balance::from_near(1).as_yoctonear();
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, passing());
+    for i in 0..12 {
+        let id = r.file(root, WORKER, "F1");
+        r.sim
+            .call(REVIEWER, CONTRACT, "challenge")
+            .args_json(json!({"claim_id":id}))
+            .deposit(Balance::from_millinear(280))
+            .transact()
+            .assert_success();
+        r.persist(id, &[root, done]);
+        finalize_checked(&mut r, id, REVIEWER, 45 * n / 100, 5 * n / 100, 0);
+        assert_eq!(rep(&r, REVIEWER), 105); // only the first win grants +5
+        assert_eq!(rep(&r, COORD), 100u8.saturating_sub(15 * (i + 1)));
+    }
+    assert_eq!(rep(&r, WORKER), 120);
+    assert_eq!(rep(&r, COORD), 0);
+    // First worker win is clipped at 120 but still consumes its entitlement.
+    let id = r.file(root, WORKER, "F1");
+    r.challenge(id);
+    r.persist(id, &[root, done]);
+    finalize_checked(&mut r, id, WORKER, 45 * n / 100, 5 * n / 100, 0);
+    assert_eq!(rep(&r, WORKER), 120);
+    let id = r.file_as(WORKER, root, REVIEWER, "F1");
+    r.sim
+        .call(REVIEWER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id":id}))
+        .deposit(Balance::from_millinear(280))
+        .transact()
+        .assert_success();
+    r.persist(id, &[root, done]);
+    finalize_checked(&mut r, id, REVIEWER, 45 * n / 100, 5 * n / 100, 0);
+    assert_eq!(rep(&r, WORKER), 105);
+    let id = r.file(root, WORKER, "F1");
+    r.challenge(id);
+    r.persist(id, &[root, done]);
+    finalize_checked(&mut r, id, WORKER, 45 * n / 100, 5 * n / 100, 0);
+    assert_eq!(rep(&r, WORKER), 107); // exoneration only, no deferred clipped bonus
+}
+
+#[test]
+fn finalize_odd_bond_snapshot_and_adjudicated_deadline_boundary() {
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, b"wrong");
+    for (bond, challenged, payout, treasury) in [(7u128, false, 12u128, 2u128), (7, true, 18, 3)] {
+        r.sim.call("sponsor.near",CONTRACT,"update_parameters").args_json(json!({"stake":Balance::from_near(1).as_yoctonear().to_string(),"blame_bond":bond.to_string(),"challenge_bond":bond.to_string()})).transact().assert_success();
+        let id = r.file(root, WORKER, "F1");
+        r.sim.call("sponsor.near",CONTRACT,"update_parameters").args_json(json!({"stake":Balance::from_near(1).as_yoctonear().to_string(),"blame_bond":"19","challenge_bond":"19"})).transact().assert_success();
+        if challenged {
+            r.challenge(id);
+            assert_eq!(r.state(id)["claim"]["challenge_bond"], "7");
+            r.persist(id, &[root, done]);
+        }
+        let before = r.state(id);
+        let deadline = before["claim"]["challenge_deadline"].as_u64().unwrap();
+        r.sim.advance_to(deadline - 2);
+        let at = r
+            .sim
+            .call(CALLER, CONTRACT, "finalize")
+            .args_json(json!({"claim_id":id}))
+            .submit();
+        r.sim.settle();
+        let out = r.sim.outcome(at);
+        assert_eq!(out.receipt("finalize").unwrap().block_height, deadline);
+        out.assert_panic_contains("challenge window still open");
+        assert_eq!(r.state(id), before);
+        finalize_checked(&mut r, id, COORD, payout, treasury, bond);
+    }
+}
+
+#[test]
+fn finalize_bonus_is_per_run_and_prepaid_outsider_records_rollback() {
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, passing());
+    let id = r.file_as(CALLER, root, WORKER, "F1");
+    let before = r.state(id);
+    let failed = r
+        .sim
+        .call(CALLER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id":id}))
+        .deposit(Balance::from_millinear(250))
+        .transact();
+    failed.assert_panic_contains("insufficient challenge bond and storage deposit");
+    assert_eq!(failed.effects().storage_bytes(CONTRACT), 0);
+    assert_eq!(r.state(id), before);
+    r.sim
+        .call(REVIEWER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id":id}))
+        .deposit(Balance::from_millinear(280))
+        .transact()
+        .assert_success();
+    r.persist(id, &[root, done]);
+    let n = Balance::from_near(1).as_yoctonear();
+    finalize_checked(&mut r, id, REVIEWER, 45 * n / 100, 5 * n / 100, 0);
+    assert_eq!(rep(&r, REVIEWER), 105);
+    // Same account, distinct registered run: bonus eligible again, scores preserved.
+    r.sim.call("sponsor.near",CONTRACT,"register").args_json(json!({"run_id":"second","agents":[COORD,WORKER,REVIEWER],"task_spec":STANDARD.encode(&r.spec),"verifier":{"task_spec_hash":digest(&r.spec),"verifier_hash":r.verifier,"verifier_key":null}})).deposit(Balance::from_millinear(3050)).transact().assert_success();
+    assert_eq!(rep(&r, REVIEWER), 105);
+    let mut head = String::new();
+    let mut tx = String::new();
+    for (seq, actor, kind, body) in [
+        (0, COORD, "task_assigned", input()),
+        (1, WORKER, "settlement", passing().to_vec()),
+    ] {
+        let out=r.sim.call(actor,CONTRACT,"anchor").args_json(json!({"run_id":"second","seq":seq,"actor":actor,"kind":kind,"payload_hash":digest(&body),"prev_hash":head,"task":{"assignment_seq":0,"worker":WORKER,"parent_assignment_seq":null}})).deposit(Balance::from_millinear(20)).transact();
+        out.assert_success();
+        head = out.json();
+        if seq == 0 {
+            tx = out.hash.to_string();
+        }
+    }
+    let out=r.sim.call(COORD,CONTRACT,"file_claim").args_json(json!({"run_id":"second","blamed":WORKER,"failure_class":"F1","verifier_hash":r.verifier,"evidence_seqs":[0],"evidence_payload_hashes":[digest(&input())],"evidence_tx_hashes":[tx]})).deposit(Balance::from_millinear(280)).transact();
+    out.assert_success();
+    let id: u64 = out.json();
+    r.sim
+        .call(REVIEWER, CONTRACT, "challenge")
+        .args_json(json!({"claim_id":id}))
+        .deposit(Balance::from_millinear(280))
+        .transact()
+        .assert_success();
+    r.sim.call(CALLER,CONTRACT,"adjudicate").args_json(json!({"claim_id":id,"task_spec":STANDARD.encode(&r.spec),"payloads":[{"seq":0,"bytes":STANDARD.encode(input())},{"seq":1,"bytes":STANDARD.encode(passing())}]})).transact().assert_success();
+    let claim: Value = r
+        .sim
+        .view(CONTRACT, "get_claim", json!({"claim_id":id}))
+        .json();
+    r.sim
+        .advance_to(claim["challenge_deadline"].as_u64().unwrap() + 1);
+    let out = r
+        .sim
+        .call("sponsor.near", CONTRACT, "finalize")
+        .args_json(json!({"claim_id":id}))
+        .transact();
+    out.assert_success();
+    assert_eq!(out.effects().storage_bytes(CONTRACT), 0);
+    assert_eq!(rep(&r, REVIEWER), 110);
+    r.sim.findings().assert_none();
+}
+
+#[test]
+fn finalize_default_four_slashes_then_fifth_zero() {
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    r.complete(root, WORKER, b"wrong");
+    let n = Balance::from_near(1).as_yoctonear();
+    for i in 0..5 {
+        let id = r.file(root, WORKER, "F1");
+        let slash = if i < 4 { n / 4 } else { 0 };
+        finalize_checked(&mut r, id, COORD, n / 4 + slash * 4 / 5, slash / 5, slash);
+        assert_eq!(rep(&r, WORKER), 90 - 10 * i);
+    }
 }
