@@ -107,4 +107,6 @@ Hashes may commit to off-chain bytes that later exceed these bounds or become un
 
 Registration, filing and challenge fund their measured storage separately from principal and refund excess. Remaining stakes stay locked. Failed reporter-payout recovery is unimplemented. Challenged claims stay Challenged after preview until 2.9/2.10 implement their lifecycle.
 
+Eligibility currently permits self-claims and challenges by any account, including the reporter and blamed agent. Blamed-agent self-challenge is an intended defense. Reporter self-challenge is also admitted; there is no timeout or recovery for unresolved challenged claims in this slice. This remains a lifecycle limitation to review when implementing resolution, rather than an established safe self-dealing policy. `get_reputation` returns the baseline 100 for an unknown account; that value does not prove registration or participation.
+
 Parked: T1/T3 verifiers, F2 with RECV/timeout evidence, F4 attribution, F5a composition, nested-delegation verification, production separate-verifier dispatch, and chunked evidence upload. These are not silently counted as supported. Current state/event/claim layouts require a fresh deployment; there is no migration. The funded Gate-1 deployment and its evidence remain untouched.
