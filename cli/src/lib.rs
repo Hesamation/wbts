@@ -13,7 +13,7 @@ use std::{
 };
 
 pub const NEAR: u128 = 1_000_000_000_000_000_000_000_000;
-pub const PIN: &str = "08fc983ac89ff77b22129158b22eb7bd461eb04215955b51d433331385c2bf58";
+pub const PIN: &str = "6c8f4458183fc6f6e5c3d889d7f9ad07ef26ffbaafaa59d67406e15980b90444";
 pub const SPEC: &[u8] = br#"{"task_type":"t2_fee_split_v1","fee_basis_points":250}"#;
 pub const INPUT: &[u8] = br#"{"entries":["10000","25000","15000"],"declared_total":"50000"}"#;
 pub const OUTPUT: &[u8] = br#"{"fee":"1250","net":"48750"}"#;

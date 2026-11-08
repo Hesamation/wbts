@@ -80,7 +80,8 @@ writes, accepts as an argument, or prints private keys. Credential parse errors
 are redacted. Keep credentials exclusively in the local keystore.
 
 Parameters come from `get_parameters`; the source/dependency-manifest verifier
-hash is pinned to `08fc983ac89ff77b22129158b22eb7bd461eb04215955b51d433331385c2bf58`.
+hash is pinned to `6c8f4458183fc6f6e5c3d889d7f9ad07ef26ffbaafaa59d67406e15980b90444`
+for the 2.18 build. Earlier deployment identities are preserved in their run logs.
 This is an identity pin, not evidence that an arbitrary deployment ran that source.
 The contract and its historical deployed-WASM evidence remain separate artifacts.
 

@@ -1,6 +1,6 @@
-# Contract status through 2.10
+# Contract status through 2.18
 
-The contract supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **persisted causal adjudication of direct T2 fee-split tasks**. `preview_adjudication` computes a verdict without changing state. Permissionless `adjudicate` persists that exact result once, without transfers or reputation effects. `finalize` settles unchallenged and adjudicated claims after the original deadline.
+The contract supports registered run logs, owner-adjustable amounts, bonded claims/challenges, and **persisted causal adjudication of direct T2 fee-split tasks**. `preview_adjudication` computes a verdict without changing state. Permissionless `adjudicate` persists that exact result once, without transfers or reputation effects. Unresolved challenged claims can expire Overturned through `resolve_expired`. `finalize` is the sole settlement path, after the original challenge deadline.
 
 ## Verification architecture and production direction
 
@@ -75,15 +75,39 @@ The first successful, fully funded `challenge(claim_id)` freezes the run's event
 
 The verifier checks the frozen stored-event chain, implementation/spec identities and each payload hash before interpreting task contents. It derives the required assignment and unique completion from authenticated task links within the snapshot, rather than trusting a reporter-selected suffix. Only the relevant task's payloads are needed; unrelated sibling failures cannot steer the verdict. Their event metadata still participates in chain verification. Payload argument order does not affect the result.
 
-If a completion exists in the snapshot, both payloads are required, including when the input later proves invalid. If no completion exists, invalid authenticated input may still establish F3. Valid input without a completion produces no verdict; timeout logic is not implemented here. Missing, forged, mismatching, oversized, cross-task or unsupported evidence rejects without changing the claim, reputation or money. A caller's bad bytes are not an F4 conviction of the original agent. Withholding responsibility and recovery remain for 2.18.
+If a completion exists in the snapshot, both payloads are required, including when the input later proves invalid. If no completion exists, invalid authenticated input may still establish F3. Valid input without a completion produces no verifier verdict; F2 task-timeout attribution is not implemented here. Missing, forged, mismatching, oversized, cross-task or unsupported evidence rejects without changing the claim, reputation or money. A caller's bad bytes are not an F4 conviction of the original agent. Unresolved claims can subsequently expire under the claimant-burden rule below; party-specific withholding penalties remain a separate design step.
 
 ## Persisting the decision
 
 `adjudicate(claim_id, task_spec, payloads) -> Verification` takes the same exact-base64-byte ABI as preview. The first call requires Challenged status and invokes the existing preview computation directly in Rust. It stores the full result as `adjudication_result`, sets status to AdjudicatedUpheld or AdjudicatedOverturned, and sets `corrected_attribution` to the finding agent (or null for passing S2). The field also names the original blamed agent when its allegation is upheld; it is not necessarily a different agent.
 
-Anyone may call after challenge, including after the challenge deadline; there is no separate adjudication deadline. Subsequent decodable calls return the stored result without rechecking evidence or writing state. SDK JSON/type and nonpayable-deposit checks still apply. Preview itself continues to require Challenged status; read the persisted result through `get_claim` afterward.
+Anyone may call after challenge, including after the challenge deadline or expiry eligibility height. The first successful adjudication or expiry resolution wins. Subsequent decodable adjudication calls return a stored verifier result without rechecking evidence or writing state. An expiry-resolved claim has no verifier result and rejects adjudication because it is no longer Challenged. SDK JSON/type and nonpayable-deposit checks still apply. Preview itself continues to require Challenged status; read the persisted result/status through `get_claim` afterward.
 
 Adjudication consumes the challenger-funded padding, preserving the serialized claim length and asserting unchanged flushed storage usage. It accepts no deposit, sends no transfers, and changes no stakes, bonds, treasury or reputation; its caller pays gas. Unused padding remains paid physical storage, with no deletion/refund policy added here. Both bonds remain locked until finalize. A missing or unauthenticatable evidence submission stays Challenged and may be retried.
+
+### Unresolved challenge expiry (2.18)
+
+`resolve_expired(claim_id) -> ClaimStatus` is permissionless and nonpayable.
+For a Challenged claim with no verifier result it requires block height strictly
+greater than `evidence_snapshot.challenge_height + 600`, with checked arithmetic.
+This is always 600 blocks, including when demo mode uses a 60-block filing
+challenge window. The deadline is measured from challenge, not filing.
+
+Expiry sets `AdjudicatedOverturned` because the reporter has not established the
+claim. Anchors cannot establish which off-chain bytes are unavailable or who
+withheld them. No verifier Finding, origin or corrected attribution is invented:
+`adjudication_result` and `corrected_attribution` remain null. Status is the stored
+outcome; `get_claim` distinguishes this default from evidence-based adjudication.
+The funded padding remains intact. No state fields are added; flushed storage
+usage must remain unchanged. No stakes, bonds, reputation, treasury or transfers
+change during expiry resolution.
+
+Existing AdjudicatedUpheld and AdjudicatedOverturned outcomes are returned
+unchanged, even before expiry eligibility. Pending, Finalized and unknown claims
+reject. Expiry never produces Upheld. Post-challenge appends cannot change the
+deadline or default. Expiry does not execute automatically: a caller pays gas to
+resolve, then calls `finalize` for the existing case-3 settlement. Late valid
+adjudication remains possible while the claim is still Challenged.
 
 ## Causal result and scope boundary
 
@@ -107,7 +131,7 @@ The effective supported spec + two payload bodies total at most 17408 bytes. The
 
 The measured 100-event case uses 128 ledger entries summing to u128::MAX, a 1024-byte spec and two 8192-byte bodies. See `../codex-log/2.9-sim-gas.json` for stateful adjudication simulator gas/storage and `../codex-log/2.9-preview-stress.json` for preview; these are not measured testnet prices or a proof of all possible gas paths. Single-call gas bounds the evidence that can be processed. **Chunked upload is future work.** The state-changing `adjudicate(claim_id, task_spec, payloads)` caller pays that call's gas; adjudication gas is not priced into the existing economics. Do not describe those figures as all-in costs.
 
-Hashes may commit to off-chain bytes that later exceed these bounds or become unavailable. The hash-only anchoring API cannot prove preimage size/availability. Such a submission gets no verdict here; there is no automatic withholding penalty or resolution guarantee. Supporting production data availability and recovery is outstanding work.
+Hashes may commit to off-chain bytes that later exceed these bounds or become unavailable. The hash-only anchoring API cannot prove preimage size/availability. Such a submission gets no verifier verdict, but its unresolved challenge can expire Overturned after 600 blocks. This provides a permissionless resolution path, not an automatic or party-specific withholding penalty. Supporting production data availability and failed-payout recovery is outstanding work.
 
 ## Remaining state and work
 
@@ -115,7 +139,7 @@ Hashes may commit to off-chain bytes that later exceed these bounds or become un
 
 Registration, filing and challenge fund their measured storage separately from principal and refund excess. Remaining stakes stay locked. Failed-payout recovery is unimplemented. Preview leaves claims Challenged; adjudicate persists their decision; finalize settles after the window.
 
-Eligibility currently permits self-claims and challenges by any account, including the reporter and blamed agent. Blamed-agent self-challenge is an intended defense. Reporter self-challenge is also admitted; there is no timeout or recovery for unresolved challenged claims in this slice. This remains a lifecycle limitation to review when implementing resolution, rather than an established safe self-dealing policy. `get_reputation` returns the baseline 100 for an unknown account; that value does not prove registration or participation.
+Eligibility currently permits self-claims and challenges by any account, including the reporter and blamed agent. Blamed-agent self-challenge is an intended defense. Reporter self-challenge is also admitted; unresolved challenges can expire Overturned. This is not an established safe self-dealing policy: roles may overlap and existing finalization applies each role's effects in order. `get_reputation` returns the baseline 100 for an unknown account; that value does not prove registration or participation.
 
 Parked: T1/T3 verifiers, F2 with RECV/timeout evidence, F4 attribution, F5a composition, nested-delegation verification, production separate-verifier dispatch, and chunked evidence upload. These are not silently counted as supported. Current state/event/claim layouts require a fresh deployment; there is no migration. The funded Gate-1 deployment and its evidence remain untouched.
 

@@ -582,6 +582,52 @@ impl LogAnchor {
         t2::info()
     }
 
+    /// An unresolved challenge expires against the reporter after 600 blocks.
+    /// This is a burden-of-proof default, not a verified fault or a determination
+    /// of who withheld evidence. Anyone may resolve; only finalize settles funds.
+    /// Existing adjudicated outcomes replay; Pending and Finalized reject.
+    pub fn resolve_expired(&mut self, claim_id: u64) -> ClaimStatus {
+        let mut claim = self.claims.get(&claim_id).cloned().expect("unknown claim");
+        if matches!(
+            claim.status,
+            ClaimStatus::AdjudicatedUpheld | ClaimStatus::AdjudicatedOverturned
+        ) {
+            return claim.status;
+        }
+        assert!(
+            matches!(claim.status, ClaimStatus::Challenged),
+            "claim must be challenged"
+        );
+        assert!(
+            claim.adjudication_result.is_none(),
+            "claim already adjudicated"
+        );
+        let deadline = claim
+            .evidence_snapshot
+            .as_ref()
+            .expect("missing evidence snapshot")
+            .challenge_height
+            .checked_add(600)
+            .expect("adjudication deadline overflow");
+        assert!(
+            env::block_height() > deadline,
+            "adjudication window still open"
+        );
+        let storage_before = env::storage_usage();
+        claim.status = ClaimStatus::AdjudicatedOverturned;
+        claim.corrected_attribution = None;
+        // Keep the funded slot and absent verifier result: no bytes were checked.
+        // Updating the existing one-byte status requires no new storage or schema.
+        self.claims.insert(claim_id, claim);
+        self.claims.flush();
+        assert_eq!(
+            env::storage_usage(),
+            storage_before,
+            "expiry storage changed"
+        );
+        ClaimStatus::AdjudicatedOverturned
+    }
+
     /// Persist the deterministic preview once. Anyone may pay gas; no principal,
     /// reputation or transfers change. Replay returns the original full result.
     pub fn adjudicate(

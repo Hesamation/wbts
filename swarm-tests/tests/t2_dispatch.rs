@@ -941,14 +941,14 @@ fn bounded_evidence_and_100_event_wasm_gas_measurement() {
         "attached_gas": 100_000_000_000_000u64});
     std::fs::write(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../codex-log/2.10-preview-stress.json"),
+            .join("../codex-log/2.18-preview-stress.json"),
         serde_json::to_vec_pretty(&metrics).unwrap(),
     )
     .unwrap();
     let published: Value = r.sim.view(CONTRACT, "get_verifier_info", json!({})).json();
     std::fs::write(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../codex-log/2.10-verifier-info.json"),
+            .join("../codex-log/2.18-verifier-info.json"),
         serde_json::to_vec_pretty(&published).unwrap(),
     )
     .unwrap();
@@ -990,7 +990,7 @@ fn bounded_evidence_and_100_event_wasm_gas_measurement() {
         json!(persisted.effects().gas_paid().as_yoctonear().to_string());
     persisted_metrics["storage_delta_bytes"] = json!(persisted.effects().storage_bytes(CONTRACT));
     std::fs::write(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../codex-log/2.10-sim-gas.json"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../codex-log/2.18-sim-gas.json"),
         serde_json::to_vec_pretty(&persisted_metrics).unwrap(),
     )
     .unwrap();
@@ -1020,6 +1020,244 @@ fn rep(r: &Run, who: &str) -> u8 {
         .view(CONTRACT, "get_reputation", json!({"agent": who}))
         .json()
 }
+
+fn expire(r: &mut Run, id: u64) {
+    let before = r.state(id);
+    let deadline = before["claim"]["evidence_snapshot"]["challenge_height"]
+        .as_u64()
+        .unwrap()
+        + 600;
+    r.sim.advance_to(r.sim.height().max(deadline + 1));
+    let out = r
+        .sim
+        .call(CALLER, CONTRACT, "resolve_expired")
+        .args_json(json!({"claim_id": id}))
+        .transact();
+    out.assert_success();
+    assert_eq!(out.json::<Value>(), "AdjudicatedOverturned");
+    assert!(out.effects().near.is_empty());
+    assert_eq!(out.effects().storage_bytes(CONTRACT), 0);
+    let mut expected = before;
+    expected["claim"]["status"] = json!("AdjudicatedOverturned");
+    assert_eq!(r.state(id), expected);
+    assert!(expected["claim"]["adjudication_result"].is_null());
+    assert!(expected["claim"]["corrected_attribution"].is_null());
+}
+
+#[test]
+fn expiry_strict_boundary_replay_and_terminal_rejections() {
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, passing());
+    let id = r.file(root, WORKER, "F1");
+    for claim_id in [id, 999] {
+        r.sim
+            .call(CALLER, CONTRACT, "resolve_expired")
+            .args_json(json!({"claim_id": claim_id}))
+            .transact()
+            .assert_panic_contains(if claim_id == id {
+                "claim must be challenged"
+            } else {
+                "unknown claim"
+            });
+    }
+    r.challenge(id);
+    let frozen = r.state(id);
+    r.sim
+        .call(CALLER, CONTRACT, "resolve_expired")
+        .args_json(json!({"claim_id": id}))
+        .transact()
+        .assert_panic_contains("adjudication window still open");
+    assert_eq!(r.state(id), frozen);
+    let deadline = frozen["claim"]["evidence_snapshot"]["challenge_height"]
+        .as_u64()
+        .unwrap()
+        + 600;
+    r.sim.advance_to(deadline - 2);
+    let boundary = r
+        .sim
+        .call(CALLER, CONTRACT, "resolve_expired")
+        .args_json(json!({"claim_id": id}))
+        .submit();
+    r.sim.step();
+    let after = r
+        .sim
+        .call(REVIEWER, CONTRACT, "resolve_expired")
+        .args_json(json!({"claim_id": id}))
+        .submit();
+    r.sim.settle();
+    let boundary = r.sim.outcome(boundary);
+    boundary.assert_panic_contains("adjudication window still open");
+    assert_eq!(
+        boundary.receipt("resolve_expired").unwrap().block_height,
+        deadline
+    );
+    let after = r.sim.outcome(after);
+    after.assert_success();
+    assert_eq!(
+        after.receipt("resolve_expired").unwrap().block_height,
+        deadline + 1
+    );
+    assert_eq!(after.json::<Value>(), "AdjudicatedOverturned");
+    assert!(after.effects().near.is_empty());
+    assert_eq!(after.effects().storage_bytes(CONTRACT), 0);
+    let resolved = r.state(id);
+    let replay = r
+        .sim
+        .call(COORD, CONTRACT, "resolve_expired")
+        .args_json(json!({"claim_id": id}))
+        .transact();
+    replay.assert_success();
+    assert_eq!(replay.json::<Value>(), "AdjudicatedOverturned");
+    assert!(replay.effects().near.is_empty());
+    assert_eq!(replay.effects().storage_bytes(CONTRACT), 0);
+    assert_eq!(r.state(id), resolved);
+    // Expiry wins: even complete, valid evidence cannot replace the default.
+    let complete_args = r.args(id, &[root, done]);
+    r.sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(complete_args)
+        .transact()
+        .assert_panic_contains("claim must be challenged");
+    assert_eq!(r.state(id), resolved);
+    let n = Balance::from_near(1).as_yoctonear();
+    finalize_checked(&mut r, id, WORKER, 45 * n / 100, 5 * n / 100, 0);
+    let finalized = r.state(id);
+    r.sim
+        .call(CALLER, CONTRACT, "resolve_expired")
+        .args_json(json!({"claim_id": id}))
+        .transact()
+        .assert_panic_contains("claim must be challenged");
+    assert_eq!(r.state(id), finalized);
+}
+
+#[test]
+fn expiry_unproved_claims_use_case_three_without_inventing_attribution() {
+    let n = Balance::from_near(1).as_yoctonear();
+    // Completion absent, completion bytes unavailable, assignment unavailable,
+    // both bodies unavailable, and S6 with known invalid input: same default.
+    // These describe test caller inputs, not on-chain withholding detection.
+    for scenario in 0..5 {
+        let mut r = Run::new(250);
+        let body = if scenario == 4 {
+            b"malformed".to_vec()
+        } else {
+            input()
+        };
+        let root = r.assign(WORKER, &body);
+        let done = (scenario != 0).then(|| r.complete(root, WORKER, b"wrong"));
+        let id = r.file(root, WORKER, "F1");
+        r.sim
+            .call(REVIEWER, CONTRACT, "challenge")
+            .args_json(json!({"claim_id": id}))
+            .deposit(Balance::from_millinear(280))
+            .transact()
+            .assert_success();
+        let frozen = r.state(id);
+        if scenario == 1 || scenario == 2 {
+            let supplied = if scenario == 1 {
+                vec![root]
+            } else {
+                vec![done.unwrap()]
+            };
+            let partial_args = r.args(id, &supplied);
+            r.sim
+                .call(CALLER, CONTRACT, "adjudicate")
+                .args_json(partial_args)
+                .transact()
+                .assert_panic_contains("incomplete task evidence");
+            assert_eq!(r.state(id), frozen);
+        }
+        if scenario == 4 {
+            let preview = r.preview(id, &[root, done.unwrap()]);
+            assert_eq!(preview["finding"]["agent"], COORD);
+            assert_eq!(preview["origin"], "Propagation");
+        }
+        // Appending after challenge cannot change the expiry basis or deadline.
+        r.append(REVIEWER, "note", b"late", None);
+        expire(&mut r, id);
+        finalize_checked(&mut r, id, REVIEWER, 45 * n / 100, 5 * n / 100, 0);
+        assert_eq!(
+            [COORD, WORKER, REVIEWER].map(|a| rep(&r, a)),
+            [85, 102, 105]
+        );
+    }
+}
+
+#[test]
+fn expiry_preserves_adjudicated_outcomes_before_and_after_deadline() {
+    for late in [false, true] {
+        for upheld in [false, true] {
+            let mut r = Run::new(250);
+            let root = r.assign(WORKER, &input());
+            let done = r.complete(root, WORKER, if upheld { b"wrong" } else { passing() });
+            let id = r.file(root, WORKER, "F1");
+            r.challenge(id);
+            if late {
+                let height = r.state(id)["claim"]["evidence_snapshot"]["challenge_height"]
+                    .as_u64()
+                    .unwrap();
+                r.sim.advance_to(height + 601);
+            }
+            let verified = r.persist(id, &[root, done]);
+            let frozen = r.state(id);
+            let replay = r
+                .sim
+                .call(REVIEWER, CONTRACT, "resolve_expired")
+                .args_json(json!({"claim_id": id}))
+                .transact();
+            replay.assert_success();
+            assert_eq!(
+                replay.json::<Value>(),
+                if upheld {
+                    "AdjudicatedUpheld"
+                } else {
+                    "AdjudicatedOverturned"
+                }
+            );
+            assert_eq!(r.state(id), frozen);
+            assert!(replay.effects().near.is_empty());
+            assert_eq!(replay.effects().storage_bytes(CONTRACT), 0);
+            assert_eq!(r.state(id)["claim"]["adjudication_result"], verified);
+            let n = Balance::from_near(1).as_yoctonear();
+            if upheld {
+                finalize_checked(&mut r, id, COORD, 65 * n / 100, n / 10, n / 4);
+                assert_eq!([COORD, WORKER].map(|a| rep(&r, a)), [100, 90]);
+            } else {
+                finalize_checked(&mut r, id, WORKER, 45 * n / 100, 5 * n / 100, 0);
+                assert_eq!([COORD, WORKER].map(|a| rep(&r, a)), [85, 107]);
+            }
+        }
+    }
+}
+
+#[test]
+fn expiry_challenger_bonus_is_consumed_once_per_run_and_roles_accumulate() {
+    let n = Balance::from_near(1).as_yoctonear();
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    for i in 0..2 {
+        let id = r.file(root, WORKER, "F1");
+        r.sim
+            .call(REVIEWER, CONTRACT, "challenge")
+            .args_json(json!({"claim_id": id}))
+            .deposit(Balance::from_millinear(280))
+            .transact()
+            .assert_success();
+        expire(&mut r, id);
+        finalize_checked(&mut r, id, REVIEWER, 45 * n / 100, 5 * n / 100, 0);
+        assert_eq!(
+            [COORD, WORKER, REVIEWER].map(|a| rep(&r, a)),
+            [85 - 15 * i, 102 + 2 * i, 105]
+        );
+    }
+    let id = r.file_as(WORKER, root, WORKER, "F1");
+    r.challenge(id);
+    expire(&mut r, id);
+    finalize_checked(&mut r, id, WORKER, 45 * n / 100, 5 * n / 100, 0);
+    assert_eq!(rep(&r, WORKER), 96); // 104 - 15 + 5 + 2; no new culprit penalty
+}
+
 fn finalize_checked(
     r: &mut Run,
     id: u64,
@@ -1040,7 +1278,7 @@ fn finalize_checked(
     let old_stakes = stakes(&before["run"]);
     let balance = r.sim.balance(recipient).as_yoctonear();
     let deadline = before["claim"]["challenge_deadline"].as_u64().unwrap();
-    r.sim.advance_to(deadline + 1);
+    r.sim.advance_to(r.sim.height().max(deadline + 1));
     // sponsor is distinct from all payout roles in these fixtures, isolating gas.
     let out = r
         .sim
@@ -1213,12 +1451,10 @@ fn finalize_four_cases_s2_s5_s6_and_overlapping_roles() {
             .transact();
         early.assert_panic_contains("challenge window still open");
         assert_eq!(r.state(id), frozen);
-        let (receiver, payout, treasury, slash) = if challenger.is_none() {
-            (reporter, 45 * n / 100, 5 * n / 100, n / 4)
-        } else if upheld {
-            (reporter, 65 * n / 100, n / 10, n / 4)
-        } else {
-            (challenger.unwrap(), 45 * n / 100, 5 * n / 100, 0)
+        let (receiver, payout, treasury, slash) = match challenger {
+            None => (reporter, 45 * n / 100, 5 * n / 100, n / 4),
+            Some(_) if upheld => (reporter, 65 * n / 100, n / 10, n / 4),
+            Some(challenger) => (challenger, 45 * n / 100, 5 * n / 100, 0),
         };
         finalize_checked(&mut r, id, receiver, payout, treasury, slash);
         assert_eq!(
