@@ -350,3 +350,146 @@ fn failed_registration_stops_s2_before_any_anchor_or_bond() {
             .is_null()
     );
 }
+
+fn demo(scenario: &str, self_challenge: bool) -> Engine<Simulator> {
+    let (mut e, _) = setup();
+    // The public worker alias selects the configured worker and standard watcher.
+    // Other tests keep their existing account IDs and S2 fixtures.
+    e.transport
+        .0
+        .create_account("watcher-wbts.testnet", Balance::from_near(100));
+    e.execute(Command::RunDemo {
+        scenario: scenario.into(),
+        run_id: Some(format!("harness-{scenario}")),
+        reporter: REPORTER.into(),
+        worker: WORKER.into(),
+        challenger: if self_challenge {
+            "worker".into()
+        } else {
+            CHALLENGER.into()
+        },
+        registrar: Some(WORKER.into()),
+    })
+    .unwrap();
+    e
+}
+
+#[test]
+fn s1_true_blame() {
+    let e = demo("s1", false);
+    let p = e.journal.proof.unwrap();
+    assert_eq!(p["run"]["creator"], WORKER);
+    assert_eq!(p["after"]["reputations"][WORKER], 90);
+    assert_eq!(
+        p["verification"]["payout_yocto"],
+        (NEAR * 45 / 100).to_string()
+    );
+    assert_eq!(e.journal.transactions.len(), 5);
+    assert!(e.journal.preview.is_none());
+}
+
+#[test]
+fn s5_precondition() {
+    let e = demo("s5", false);
+    let p = e.journal.proof.unwrap();
+    assert_eq!(
+        p["verification"]["payout_yocto"],
+        (NEAR * 65 / 100).to_string()
+    );
+    assert_eq!(p["after"]["reputations"][REPORTER], 90);
+    assert_eq!(p["after"]["reputations"][WORKER], 100);
+    assert_eq!(e.journal.preview.unwrap()["verdict"], "Upheld");
+}
+
+#[test]
+fn s6_causal_order_both_challengers() {
+    for self_challenge in [false, true] {
+        let e = demo("s6", self_challenge);
+        let p = e.journal.proof.unwrap();
+        assert_eq!(p["after"]["reputations"][REPORTER], 85);
+        assert_eq!(
+            p["after"]["reputations"][WORKER],
+            if self_challenge { 107 } else { 102 }
+        );
+        assert_eq!(p["claim"]["corrected_attribution"], REPORTER);
+        assert_eq!(
+            p["claim"]["adjudication_result"]["finding"]["failure_class"],
+            "F3"
+        );
+        assert_eq!(p["verification"]["stake_slash_yocto"], "0");
+        assert_eq!(
+            p["verification"]["payout_yocto"],
+            (NEAR * 45 / 100).to_string()
+        );
+    }
+}
+
+#[test]
+fn s3_tamper_diagnostic_no_claim_or_money() {
+    let mut e = demo("s3", false);
+    assert_eq!(e.journal.transactions.len(), 3);
+    assert_eq!(e.journal.proof.as_ref().unwrap()["mismatch"]["seq"], 1);
+    assert_eq!(
+        e.journal.proof.as_ref().unwrap()["mismatch"]["signer"],
+        WORKER
+    );
+    e.execute(Command::VerifyRun {
+        run_id: "harness-s3".into(),
+        journal: None,
+    })
+    .unwrap();
+    // Also catch deletion/reordering and a locally substituted head.
+    let chain = e
+        .transport
+        .view("get_run", json!({"run_id":"harness-s3"}))
+        .unwrap();
+    e.journal.events.swap(0, 1);
+    assert_eq!(
+        wbts_cli::verify_journal(&e.journal, &chain)
+            .unwrap()
+            .unwrap()
+            .seq,
+        0
+    );
+    e.journal.events.swap(0, 1);
+    e.journal.head = "00".repeat(32);
+    assert_eq!(
+        wbts_cli::verify_journal(&e.journal, &chain)
+            .unwrap()
+            .unwrap()
+            .seq,
+        2
+    );
+}
+
+#[test]
+fn funding_gate_stops_before_registration() {
+    for (millinear, scenario) in [(100, "s1"), (3200, "s2")] {
+        let (mut e, _) = setup();
+        e.transport
+            .0
+            .create_account("poor.testnet", Balance::from_millinear(millinear));
+        let err = e
+            .execute(Command::RunDemo {
+                scenario: scenario.into(),
+                run_id: Some("unfunded".into()),
+                reporter: if scenario == "s2" {
+                    "poor.testnet".into()
+                } else {
+                    REPORTER.into()
+                },
+                worker: WORKER.into(),
+                challenger: CHALLENGER.into(),
+                registrar: Some("poor.testnet".into()),
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("funding gate"));
+        assert!(e.journal.transactions.is_empty());
+        assert!(
+            e.transport
+                .view("get_run", json!({"run_id":"unfunded"}))
+                .unwrap()
+                .is_null()
+        );
+    }
+}

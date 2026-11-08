@@ -18,10 +18,11 @@ in-process simulator and freshly built contract source. It checks the 2.18
 verifier PIN below, exact settlement and reputation on a fresh run, then a second
 run with persistent reputation. It needs no keys, funds or testnet connection.
 There is no standalone binary simulation flag. The standalone CLI suite has six
-tests; the `cli_core` simulator suite has six more (also included in the 31-test
-contract check). The focused S2 command reruns one of those six tests.
+tests; the full simulator suite has 39, including 11 CLI-engine tests. The
+`cli_core` simulator suite also exercises S1, S3, S5, both S6 challenger
+variants and the funding gate. The focused S2 command reruns the existing S2 test.
 
-The CLI provides `register`, `anchor`, `file-claim`, `challenge` and `run-demo`.
+The CLI provides `register`, `anchor`, `file-claim`, `challenge`, `run-demo` and `verify-run`.
 Linux builds require the D-Bus development library (`dbus-1`
 via pkg-config) for the existing secure keystore. The lockfile pins CLI dependencies;
 contract dependencies are unchanged.
@@ -58,7 +59,9 @@ Read [the live log](../codex-log/cli-s2-live.md) and
 
 Roles default to coordinator/reporter `coord-wbts.testnet`, worker
 `worker-wbts.testnet`, challenger `watcher-wbts.testnet`; override with `--reporter`,
-`--worker`, `--challenger`. They must be distinct. `--registrar ACCOUNT` selects
+`--worker`, `--challenger`. The registered coordinator, worker and watcher must
+be distinct. `--challenger watcher|worker` selects S6’s external watcher or worker
+self-challenge; explicit challenger account IDs remain supported for existing S2 commands. `--registrar ACCOUNT` selects
 the registration stake sponsor, defaulting to reporter, without changing settlement
 roles. Registration locks **3 NEAR** supplied by that signer. Stake release is not
 implemented in the contract; repeated runs accumulate locked principal and storage.
@@ -74,6 +77,59 @@ greater than the claim deadline; elapsed time varies with chain progress.
 
 The worker output is correct: entries 10000/25000/15000 total 50000; fee
 floor(50000 × 250 / 10000) = 1250, net 48750. There is no injected failure.
+
+## Seeded-failure harness
+
+`run-demo s1|s2|s3|s5|s6` uses the same testnet settings as the S2 example above.
+Use `--registrar worker-wbts.testnet` for the sponsor-funded demo. For S6 run both
+`run-demo s6 --challenger watcher` and `run-demo s6 --challenger worker`, each with
+a fresh run ID. No scenario deploys or modifies the contract. Current local/live
+status and exclusions: [harness log](../codex-log/harness-s1-s6.md).
+
+| Scenario | Ground truth and settlement |
+| --- | --- |
+| S1 | Valid input, incorrect 1225/47775 output; unchallenged F1 accepted. Worker run stake loses 0.25; coordinator receives 0.45 including its bond; treasury gains 0.05; worker reputation −10. Optimistic acceptance does not adjudicate truth. |
+| S2 | Correct output; false F1 overturned with no finding. Existing exact-money checks retained. |
+| S3 | Diagnostic only. Verify intact journal, edit payload at seq 1 in a separate local copy, detect seq 1 and name the on-chain signer. Three setup transactions; no claim or settlement. |
+| S5 | Declared total 49000 differs from entries summing to 50000; output 1225/47775. Worker’s F3 claim against coordinator upheld after coordinator self-challenges. Payout 0.65 to worker; coordinator stake −0.25 and challenge bond −0.25; treasury +0.10; coordinator reputation −10 only. |
+| S6 | Same malformed input; coordinator’s F1 against worker overturned. Stored finding F3/coordinator, result origin Propagation, finding origin Introduction. Coordinator bond −0.25 and reputation −15; challenger economic gain +0.20; treasury +0.05. Worker +2 reputation, watcher +5, or self-challenging worker +7 (subject to caps). All stakes unchanged. |
+
+Balances use a baseline after setup and exclude measured gas and storage costs.
+The registrar supplies **all** locked stakes: stake slashing reduces sponsor-funded
+principal. Thus S1’s sponsor/reporter aggregate is −0.05 NEAR even for true blame.
+The harness does not assert agent-owned stake or a profit for honest reporting.
+S6’s corrected finding records attribution only; a fresh bonded claim and defense
+window would be required for a further slash or blame penalty.
+
+Before any take, the CLI checks registrar ≥3.1 NEAR and each other participating
+account ≥0.30, plus 0.01 gas headroom. A sponsor also posting a bond needs another
+0.30 NEAR, checked before registration (S5 and S6 worker self-challenge when the
+worker sponsors). Each take locks another 3 NEAR; check funding for every run.
+Existing per-transaction spendable/storage/gas checks still apply.
+
+For a saved journal:
+
+```sh
+cli/target/debug/cli --contract s218.worker-wbts.testnet \
+  --rpc-url https://rpc.testnet.fastnear.com verify-run --run-id RUN_ID
+cli/target/debug/cli --contract s218.worker-wbts.testnet \
+  --rpc-url https://rpc.testnet.fastnear.com verify-run --run-id RUN_ID \
+  --journal PATH_TO_TAMPERED_COPY
+```
+
+`verify-run` recomputes the stored Borsh event chain and compares local payload
+bytes with immutable on-chain commitments and head. It prints `OK` on success;
+a mismatch prints `MISMATCH at seq N signer=ACCOUNT` and exits nonzero. The signer
+is the original on-chain actor, not proof of who edited the local copy. S3 keeps
+the intact journal and writes a sibling `*.tampered.json` for inspection.
+No signing key is read by `verify-run`.
+
+S4 cut — no F2 verifier; deadline/timeout attribution unimplemented. F4 is a local
+diagnostic, with no punishment. F2/F4/F5a adjudicators, nested traversal, panel tier,
+and ratchet remain outside this work. Fault tests cover unrelated task failures,
+spam challenges and collusion against the deterministic verifier. Sybil ratchet
+dodging and panel latency are record-only. The depth/branching limit probe stays
+gated until all six live takes succeed.
 
 ## Individual commands
 
@@ -155,8 +211,7 @@ uncertain; the CLI never automatically resubmits. Read-only RPCs retry at most
 three times. Inspect chain state and saved artifacts before manual recovery.
 There is no automatic resume/recovery command. Use one process per journal/run.
 The minimal journal is not the deferred signed event format, per-run keys, full
-log store, or full logging discipline. Other deferred commands and the harness/UI
-are not implemented here.
+log store, or full logging discipline. The full `inspect` command and UI remain deferred.
 
 ## Validation
 

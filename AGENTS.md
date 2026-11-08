@@ -1,6 +1,7 @@
 # AGENTS.md — Who Broke the Swarm (updated 2026-11-08)
 
 ## Goal and authority
+- Solo rolling workflow: complete routine changes, run proportionate checks, and commit/push promptly to the existing remote without review gates. Escalate sensitive or critical changes, architecture, strategy, scope and financial decisions to the human. Routine Git pushes are authorized; public release, submission, external messages and deployment still need authorization. Never force-push or rewrite shared history without approval.
 - Deliver a working, honestly documented staked-attribution demo with correct money
   flows and inspectable evidence. Complete approved work through implementation,
   necessary supporting changes, tests and documentation.
@@ -23,8 +24,7 @@ decision in the handover:
 - If a number seems off → flag it in codex-log/, do not silently use it.
 - If you're unsure whether something is true → write "UNVERIFIED" in the code/README
   and note it in STATUS.md. Never assert an unverified claim as fact.
-- The builder (human) wants rigor over speed. A flagged uncertainty is better than
-  a false claim that a judge catches.
+- The builder wants fast solo development with proportionate verification. Flag uncertainties; never present an unverified claim as fact.
 - Source of truth order: (1) primary sources (papers, NEAR docs, explorer), (2)
   morning-update-synthesis, (3) reframe-sharpening-addendum, (4) handover. The
   handover is LAST. If it conflicts with a primary source, the primary source wins.
@@ -44,7 +44,7 @@ decision in the handover:
 
 ## Pick
 Who Broke the Swarm — staked attribution on tamper-evident run logs. Tracks:
-swarms (primary) + business + security. Solo builder + Codex (ChatGPT Plus).
+swarms + agents (reported target tracks; verify before submission). Solo builder + Codex (ChatGPT Plus).
 
 ## Frozen scope (do not widen)
 - Conceptual mechanism: arbitrary agent count/delegation depth, deterministic-verifier
@@ -143,14 +143,9 @@ register / anchor / file_claim / challenge / adjudicate / finalize +
 resolve_panel (stub, documented no-op) / resolve_panel_with_vrf (design-only, no code) +
 views: verify_run, get_reputation, get_claim, get_run.
 
-## Shared collaboration
-- Read ../collab/STATUS.md first when it exists. In managed worktrees, resolve the
-  shared directory from the original project checkout; current path is
-  /home/alisa/Projects/ongoing/near/collab/STATUS.md. If unavailable, report that and
-  use local evidence; do not make a missing relative path an approval gate.
-- Keep STATUS.md under 40 lines: current step, open items, links. Log one short
-  paragraph per work item in codex-log/; write detailed reports once and link them.
-- Search sections first and read relevant ranges. Avoid full-file reads, full diffs
-  or build transcripts in chat; report results and paths with failing excerpts only.
-- Do not copy-paste prompts between agents; use the shared files.
-- Codex: be a critical thinker, not an executor. Flag uncertainties as "UNVERIFIED."
+## Current workflow
+- Start with STATUS.md and ../project/STATUS.md. The collab workflow is retired.
+- Maximize P(win); essential strategy, scope, financial and submission decisions belong to the builder. Routine implementation choices do not require a new approval.
+- Keep status short and link evidence once. No new full diffs or build transcripts in codex-log/.
+- Search sections first and read relevant ranges. Warn before token-heavy research or bulk processing. Do not delegate without explicit authorization.
+- Historical proposals are not approvals. Current code and primary evidence establish facts; builder-confirmed decisions govern policy.

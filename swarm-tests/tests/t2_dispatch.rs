@@ -1662,3 +1662,114 @@ fn finalize_default_four_slashes_then_fifth_zero() {
         assert_eq!(rep(&r, WORKER), 90 - 10 * i);
     }
 }
+
+#[test]
+fn distractor_failure_does_not_change_cited_task_verdict() {
+    let mut baseline = None;
+    for distractor in [false, true] {
+        let mut r = Run::new(250);
+        let root = r.assign(WORKER, &input());
+        let done = r.complete(root, WORKER, wrong_output());
+        if distractor {
+            // A second worker on a different edge introduces another real F1.
+            let other = r.assign(REVIEWER, &input());
+            r.complete(other, REVIEWER, wrong_output());
+        }
+        let id = r.file(root, WORKER, "F1");
+        r.challenge(id);
+        let result = r.persist(id, &[root, done]);
+        let scoped = json!({"verdict":result["verdict"],"finding":result["finding"],"origin":result["origin"]});
+        assert_eq!(scoped["verdict"], "Upheld");
+        assert_eq!(scoped["finding"]["agent"], WORKER);
+        assert_eq!(scoped["finding"]["failure_class"], "F1");
+        if let Some(original) = &baseline {
+            assert_eq!(&scoped, original);
+        }
+        baseline = Some(scoped);
+    }
+}
+
+fn wrong_output() -> &'static [u8] {
+    br#"{"fee":"1225","net":"47775"}"#
+}
+
+fn challenge_attack(challenger: &str) {
+    let n = Balance::from_near(1).as_yoctonear();
+    let mut r = Run::new(250);
+    let root = r.assign(WORKER, &input());
+    let done = r.complete(root, WORKER, wrong_output());
+    let id = r.file(root, WORKER, "F1");
+    let pending = r.state(id)["claim"].clone();
+    let before = r.sim.balance(challenger).as_yoctonear();
+    let out = r
+        .sim
+        .call(challenger, CONTRACT, "challenge")
+        .args_json(json!({"claim_id":id}))
+        .deposit(Balance::from_millinear(275))
+        .transact();
+    out.assert_success();
+    let gas = out.effects().gas_paid().as_yoctonear();
+    let storage = r
+        .sim
+        .storage_cost(u64::try_from(out.effects().storage_bytes(CONTRACT)).unwrap())
+        .as_yoctonear();
+    let challenged = r.state(id)["claim"].clone();
+    assert_eq!(challenged["challenge_bond"], (n / 4).to_string());
+    assert_eq!(
+        challenged["challenge_deadline"],
+        pending["challenge_deadline"]
+    );
+    let duplicate = r
+        .sim
+        .call(challenger, CONTRACT, "challenge")
+        .args_json(json!({"claim_id":id}))
+        .deposit(Balance::from_millinear(275))
+        .transact();
+    duplicate.assert_panic_contains("claim must be pending");
+    assert_eq!(r.state(id)["claim"], challenged);
+    let duplicate_gas = duplicate.effects().gas_paid().as_yoctonear();
+    let submitted = r.sim.height();
+    let args = r.args(id, &[root, done]);
+    let adjudication = r
+        .sim
+        .call(CALLER, CONTRACT, "adjudicate")
+        .args_json(args)
+        .transact();
+    adjudication.assert_success();
+    let latency = adjudication.receipt("adjudicate").unwrap().block_height - submitted;
+    // Simulator's cross-account receipt delivery is two blocks. Execution uses
+    // one deterministic receipt; this is not a live one-block latency claim.
+    assert!(
+        latency <= 2,
+        "unexpected simulator adjudication latency {latency}"
+    );
+    let result: Value = adjudication.json();
+    assert_eq!(result["verdict"], "Upheld");
+    assert_eq!(result["finding"]["agent"], WORKER);
+    assert_eq!(result["finding"]["failure_class"], "F1");
+    assert_eq!(
+        r.state(id)["claim"]["challenge_deadline"],
+        pending["challenge_deadline"]
+    );
+    finalize_checked(&mut r, id, COORD, n * 65 / 100, n / 10, n / 4);
+    let after = r.sim.balance(challenger).as_yoctonear();
+    assert_eq!(before - after - gas - duplicate_gas - storage, n / 4);
+    assert_eq!(rep(&r, WORKER), 90);
+    assert_eq!(rep(&r, REVIEWER), 100);
+    println!(
+        "attack challenger={challenger} loss=0.25 NEAR deadline_extension=0 adjudication_sim_blocks={latency}"
+    );
+}
+
+#[test]
+fn spam_challenge_griefing_loses_bond_without_extending_deadline() {
+    challenge_attack(REVIEWER);
+}
+
+#[test]
+fn colluding_worker_challenge_cannot_override_deterministic_verdict() {
+    // Worker and external challenger share the attack; neither supplies a vote.
+    // The separate self-challenge shape also loses the bond.
+    challenge_attack(REVIEWER);
+    challenge_attack(WORKER);
+}

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [codex/align-agents-20261108]
+    branches: [codex/align-agents-20261108, codex/reconciled-20261109]
   pull_request:
-    branches: [codex/align-agents-20261108]
+    branches: [codex/align-agents-20261108, codex/reconciled-20261109]
 
 permissions:
   contents: read

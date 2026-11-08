@@ -1,4 +1,6 @@
+mod harness;
 pub mod live;
+pub use harness::{Mismatch, verify_journal};
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -90,8 +92,16 @@ pub enum Command {
         #[arg(long)]
         claim_id: u64,
     },
+    /// Recompute a local journal against immutable chain events and head.
+    VerifyRun {
+        #[arg(long)]
+        run_id: String,
+        /// Optional local copy, e.g. an intentionally edited S3 journal.
+        #[arg(long)]
+        journal: Option<PathBuf>,
+    },
     RunDemo {
-        #[arg(value_parser = ["s2"])]
+        #[arg(value_parser = ["s1", "s2", "s3", "s5", "s6"])]
         scenario: String,
         #[arg(long)]
         run_id: Option<String>,
@@ -99,7 +109,7 @@ pub enum Command {
         reporter: String,
         #[arg(long, default_value = "worker-wbts.testnet")]
         worker: String,
-        #[arg(long, default_value = "watcher-wbts.testnet")]
+        #[arg(long, default_value = "watcher")]
         challenger: String,
         /// Stake sponsor; defaults to reporter. Does not change settlement roles.
         #[arg(long)]
@@ -631,20 +641,43 @@ impl<T: Transport> Engine<T> {
                 self.open(&run_id, false)?;
                 self.challenge(&signer, claim_id)
             }
+            Command::VerifyRun { run_id, journal } => self.verify_run(&run_id, journal.as_deref()),
             Command::RunDemo {
-                scenario: _,
+                scenario,
                 run_id,
                 reporter,
                 worker,
                 challenger,
                 registrar,
-            } => self.s2(
-                &run_id.unwrap_or_else(fresh),
-                &reporter,
-                &worker,
-                &challenger,
-                registrar.as_deref().unwrap_or(&reporter),
-            ),
+            } => {
+                let watcher = "watcher-wbts.testnet";
+                let selected = match challenger.as_str() {
+                    "watcher" => watcher,
+                    "worker" => &worker,
+                    other => other,
+                };
+                let registrar = registrar.as_deref().unwrap_or(&reporter);
+                let run = run_id.unwrap_or_else(|| fresh().replacen("s2", &scenario, 1));
+                // Account-wide gate precedes the first transaction, including S2.
+                let watcher = if selected == worker {
+                    watcher
+                } else {
+                    selected
+                };
+                self.funding_gate(
+                    &scenario,
+                    registrar,
+                    [&reporter, &worker, watcher],
+                    selected,
+                )?;
+                if scenario == "s2" {
+                    self.s2(&run, &reporter, &worker, selected, registrar)
+                } else {
+                    self.seeded_demo(
+                        &scenario, &run, &reporter, &worker, watcher, selected, registrar,
+                    )
+                }
+            }
         })();
         if let Err(error) = &result {
             self.journal.failure = Some(format!("{error:#}"));

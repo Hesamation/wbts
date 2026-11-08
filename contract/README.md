@@ -14,7 +14,7 @@ The first command builds the local WASM and ABI under `contract/target/near/`;
 it does not establish Docker/bit-for-bit reproducibility. The second builds the
 current contract source through cargo-near and runs all simulator integration
 tests, including the CLI engine's simulated S2. At the B1 source baseline there
-are 31 simulator tests (including six CLI-engine tests). Continue with the
+are 39 simulator tests (including 11 CLI-engine tests). Continue with the
 [CLI instructions](../cli/README.md#local-build-and-simulated-s2).
 
 Run Clippy for the WASM contract target and all simulator test targets.
