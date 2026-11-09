@@ -233,6 +233,7 @@ impl Transport for Live {
         );
         let before = self.query_account(&self.contract, None)?;
         let signer_before = self.query_account(signer, None)?;
+        let credit_before = self.view_at("get_credit", json!({"account_id":signer}), None)?;
         let deposit = principal
             .checked_add(allowance)
             .context("deposit overflow")?;
@@ -329,12 +330,11 @@ impl Transport for Live {
         let storage_bytes = after["storage_usage"]
             .as_u64()
             .context("missing storage")?
-            .checked_sub(
+            .saturating_sub(
                 before["storage_usage"]
                     .as_u64()
                     .context("missing initial storage")?,
-            )
-            .context("unexpected storage decrease")?;
+            );
         let storage = u128::from(storage_bytes)
             .checked_mul(self.storage_byte_cost)
             .context("storage overflow")?;
@@ -368,14 +368,28 @@ impl Transport for Live {
             let signer_after = self.query_account(signer, None)?;
             let actual_spent = available.checked_sub(number(&signer_after["amount"])?).context("unexpected signer balance increase; concurrent activity invalidates accounting")?;
             ensure!(
-                actual_spent
-                    == principal
-                        .checked_add(storage)
-                        .and_then(|n| n.checked_add(cost))
-                        .context("accounting overflow")?,
-                "{method} tx={hash} refund/balance reconciliation failed; inspect receipts and concurrent activity"
+                actual_spent == deposit.checked_add(cost).context("accounting overflow")?,
+                "{method} tx={hash} deposit/balance reconciliation failed; inspect receipts and concurrent activity"
             );
         }
+        let credited = if allowance > 0 {
+            let credit_after = self.view_at("get_credit", json!({"account_id":signer}), None)?;
+            let prior = if credit_before.is_null() {
+                0
+            } else {
+                number(&credit_before["available"])?
+            };
+            let delta = number(&credit_after["available"])?
+                .checked_sub(prior)
+                .context("credit decreased during funding")?;
+            ensure!(
+                delta == allowance - storage,
+                "excess credit reconciliation failed; concurrent activity invalidates measurement"
+            );
+            delta
+        } else {
+            0
+        };
         let tx = Tx {
             hash: hash.clone(),
             signer: signer.into(),
@@ -389,7 +403,8 @@ impl Transport for Live {
             storage_bytes,
             storage_yocto: storage.to_string(),
             attached_yocto: deposit.to_string(),
-            excess_refunded_yocto: (allowance - storage).to_string(),
+            excess_refunded_yocto: "0".into(),
+            excess_credited_yocto: credited.to_string(),
             result,
             outcome,
         };

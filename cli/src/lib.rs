@@ -15,7 +15,7 @@ use std::{
 };
 
 pub const NEAR: u128 = 1_000_000_000_000_000_000_000_000;
-pub const PIN: &str = "6c8f4458183fc6f6e5c3d889d7f9ad07ef26ffbaafaa59d67406e15980b90444";
+pub const PIN: &str = "63b48b0688e1fac70dbb2c2ee7de40e952902296e07268d6a38fe3b771450bc9";
 pub const SPEC: &[u8] = br#"{"task_type":"t2_fee_split_v1","fee_basis_points":250}"#;
 pub const INPUT: &[u8] = br#"{"entries":["10000","25000","15000"],"declared_total":"50000"}"#;
 pub const OUTPUT: &[u8] = br#"{"fee":"1250","net":"48750"}"#;
@@ -57,7 +57,7 @@ pub enum Command {
         #[arg(long, num_args = 3)]
         agents: Vec<String>,
     },
-    /// Hash compact, recursively key-sorted JSON and append one event.
+    /// Hash exact payload bytes and append an event (assignments use offer).
     Anchor {
         #[arg(long)]
         run_id: String,
@@ -71,6 +71,77 @@ pub enum Command {
         worker: Option<String>,
         #[arg(long)]
         assignment_seq: Option<u64>,
+    },
+    /// Offer an edge with caller-owned collateral and explicit immutable deadlines.
+    Offer {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        signer: String,
+        #[arg(long)]
+        worker: String,
+        #[arg(long)]
+        payload: PathBuf,
+        #[arg(long)]
+        accept_deadline: u64,
+        #[arg(long)]
+        work_deadline: u64,
+    },
+    Accept {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        signer: String,
+        #[arg(long)]
+        assignment_seq: u64,
+    },
+    Complete {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        signer: String,
+        #[arg(long)]
+        assignment_seq: u64,
+        #[arg(long)]
+        payload: PathBuf,
+    },
+    Release {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        signer: String,
+        #[arg(long)]
+        assignment_seq: u64,
+    },
+    Finalize {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        signer: String,
+        #[arg(long)]
+        claim_id: u64,
+    },
+    Edge {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        assignment_seq: u64,
+    },
+    Preview {
+        #[arg(long)]
+        claim_id: u64,
+    },
+    Balance {
+        #[arg(long)]
+        account_id: String,
+    },
+    Withdraw {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        signer: String,
+        #[arg(long)]
+        amount: u128,
     },
     FileClaim {
         #[arg(long)]
@@ -111,7 +182,7 @@ pub enum Command {
         worker: String,
         #[arg(long, default_value = "watcher")]
         challenger: String,
-        /// Stake sponsor; defaults to reporter. Does not change settlement roles.
+        /// Run registrar only; every participant funds its own edge reservation.
         #[arg(long)]
         registrar: Option<String>,
     },
@@ -131,8 +202,8 @@ impl App {
     pub fn validate(&self) -> Result<()> {
         account(&self.contract)?;
         ensure!(
-            self.storage_allowance <= NEAR / 10 && self.storage_allowance > 0,
-            "storage allowance must be >0 and <=0.1 NEAR"
+            self.storage_allowance <= NEAR / 4 && self.storage_allowance > 0,
+            "storage allowance must be >0 and <=0.25 NEAR"
         );
         Ok(())
     }
@@ -196,7 +267,10 @@ pub struct Tx {
     pub storage_bytes: u64,
     pub storage_yocto: String,
     pub attached_yocto: String,
+    #[serde(default)]
     pub excess_refunded_yocto: String,
+    #[serde(default)]
+    pub excess_credited_yocto: String,
     pub result: Value,
     pub outcome: Value,
 }
@@ -325,7 +399,7 @@ impl<T: Transport> Engine<T> {
             )
             .with_context(|| format!("{method} failed; no later step submitted"))?;
         println!(
-            "{method} Success tx={} block={} started_unix_ms={} elapsed_ms={} gas={} gas_yocto={} storage_bytes={} storage_yocto={} excess_refunded_yocto={}",
+            "{method} Success tx={} block={} started_unix_ms={} elapsed_ms={} gas={} gas_yocto={} storage_bytes={} storage_yocto={} excess_credited_yocto={}",
             tx.hash,
             tx.block_height,
             tx.started_unix_ms,
@@ -334,7 +408,7 @@ impl<T: Transport> Engine<T> {
             tx.gas_yocto,
             tx.storage_bytes,
             tx.storage_yocto,
-            tx.excess_refunded_yocto
+            tx.excess_credited_yocto
         );
         self.journal.transactions.push(tx.clone());
         self.save()?;
@@ -363,9 +437,6 @@ impl<T: Transport> Engine<T> {
         );
         account(signer)?;
         self.pin()?;
-        let params = self.parameters()?;
-        let stake = number(&params["stake"])?;
-        ensure!(stake == NEAR, "expected 1 NEAR participation stake");
         self.transport.check_signers(&[signer.into()])?;
         self.open(run, true)?;
         self.submit(
@@ -373,7 +444,7 @@ impl<T: Transport> Engine<T> {
             "register",
             json!({"run_id":run,"agents":agents,"task_spec":STANDARD.encode(SPEC),
             "verifier":{"task_spec_hash":hash(SPEC),"verifier_hash":PIN,"verifier_key":null}}),
-            stake.checked_mul(3).context("stake overflow")?,
+            0,
             true,
         )?;
         let view = self.transport.view("get_run", json!({"run_id":run}))?;
@@ -381,9 +452,96 @@ impl<T: Transport> Engine<T> {
             view["agents"].as_array().context("missing agents")?.len() == 3,
             "registration view mismatch"
         );
-        for agent in view["agents"].as_array().unwrap() {
-            ensure!(number(&agent["locked_stake"])? == stake, "incorrect stake");
-        }
+        Ok(())
+    }
+    pub fn offer(
+        &mut self,
+        signer: &str,
+        worker: &str,
+        bytes: &[u8],
+        accept_deadline: u64,
+        work_deadline: u64,
+    ) -> Result<u64> {
+        account(worker)?;
+        let run = self.journal.run_id.clone();
+        let view = self.transport.view("get_run", json!({"run_id":run}))?;
+        let seq = self.journal.events.len() as u64;
+        ensure!(
+            view["head_hash"] == self.journal.head
+                && view["events"].as_array().context("missing events")?.len() == seq as usize,
+            "local head differs from chain"
+        );
+        let stake = number(&self.parameters()?["stake"])?;
+        let tx=self.submit(signer,"offer_assignment",json!({"run_id":run,"worker":worker,"payload_hash":hash(bytes),"accept_deadline":accept_deadline,"work_deadline":work_deadline,"seq":seq,"prev_hash":self.journal.head}),stake,true)?;
+        ensure!(
+            tx.result == json!({"run_id":run,"assignment_seq":seq}),
+            "offer returned wrong edge"
+        );
+        let view = self.transport.view("get_run", json!({"run_id":run}))?;
+        self.journal.head = view["head_hash"].as_str().context("missing head")?.into();
+        self.journal.events.push(json!({"seq":seq,"payload_base64":STANDARD.encode(bytes),"payload_hash":hash(bytes),"tx_hash":tx.hash}));
+        self.save()?;
+        Ok(seq)
+    }
+    fn edge_id(&self, seq: u64) -> Value {
+        json!({"run_id":self.journal.run_id,"assignment_seq":seq})
+    }
+    pub fn accept(&mut self, signer: &str, seq: u64) -> Result<()> {
+        let id = self.edge_id(seq);
+        let edge = self.transport.view("get_edge", json!({"edge_id":id}))?;
+        ensure!(edge["worker"] == signer, "only assigned worker may accept");
+        self.submit(
+            signer,
+            "accept_assignment",
+            json!({"edge_id":id}),
+            number(&edge["parameters"]["stake"])?,
+            true,
+        )?;
+        Ok(())
+    }
+    pub fn release(&mut self, signer: &str, seq: u64) -> Result<()> {
+        self.submit(
+            signer,
+            "release_edge",
+            json!({"edge_id":self.edge_id(seq)}),
+            0,
+            false,
+        )?;
+        Ok(())
+    }
+    pub fn balance(&mut self, signer: &str) -> Result<Value> {
+        account(signer)?;
+        self.transport
+            .view("get_credit", json!({"account_id":signer}))
+    }
+    pub fn withdraw(&mut self, signer: &str, amount: u128) -> Result<()> {
+        let before = self.balance(signer)?;
+        ensure!(
+            number(&before["in_flight"])? == 0
+                && amount > 0
+                && amount <= number(&before["available"])?,
+            "invalid withdrawal or pending transfer"
+        );
+        let tx = self.submit(
+            signer,
+            "withdraw",
+            json!({"amount":amount.to_string()}),
+            1,
+            false,
+        )?;
+        let after = self.balance(signer)?;
+        ensure!(
+            number(&after["in_flight"])? == 0,
+            "withdrawal outcome pending; inspect chain before retrying"
+        );
+        ensure!(
+            tx.result == true,
+            "withdrawal failed; credit restored, inspect before retrying"
+        );
+        ensure!(
+            number(&after["available"])? == number(&before["available"])? + 1 - amount,
+            "withdrawal credit mismatch"
+        );
         Ok(())
     }
     pub fn anchor(&mut self, signer: &str, kind: &str, bytes: &[u8], task: Value) -> Result<()> {
@@ -395,7 +553,7 @@ impl<T: Transport> Engine<T> {
                 && view["events"].as_array().context("missing events")?.len() == seq,
             "local head differs from chain; stopped before submission"
         );
-        let bytes = canonical(bytes)?;
+        let bytes = bytes.to_vec();
         let payload_hash = hash(&bytes);
         let tx = self.submit(
             signer,
@@ -435,20 +593,32 @@ impl<T: Transport> Engine<T> {
             !seqs.is_empty() && seqs.windows(2).all(|w| w[0] < w[1]),
             "evidence sequences must be increasing and nonempty"
         );
-        let mut hashes = Vec::new();
+        let seq = seqs[0];
+        let edge = self
+            .transport
+            .view("get_edge", json!({"edge_id":self.edge_id(seq)}))?;
+        let expected = if class == "F1" {
+            &edge["worker"]
+        } else {
+            &edge["delegator"]
+        };
+        ensure!(
+            expected == blamed,
+            "blamed account does not match edge role"
+        );
+        let mut payloads = Vec::new();
         let mut txs = Vec::new();
         for seq in seqs {
             let e = self
                 .journal
                 .events
                 .get(usize::try_from(*seq)?)
-                .context("evidence sequence missing locally")?;
-            hashes.push(e["payload_hash"].clone());
+                .context("evidence missing locally")?;
+            payloads.push(json!({"seq":seq,"bytes":e["payload_base64"]}));
             txs.push(e["tx_hash"].clone());
         }
-        let bond = number(&self.parameters()?["blame_bond"])?;
-        let tx = self.submit(signer, "file_claim", json!({"run_id":self.journal.run_id,"blamed":blamed,"failure_class":class,
-            "verifier_hash":PIN,"evidence_seqs":seqs,"evidence_payload_hashes":hashes,"evidence_tx_hashes":txs}), bond, true)?;
+        let bond = number(&edge["parameters"]["blame_bond"])?;
+        let tx=self.submit(signer,"file_claim",json!({"edge_id":self.edge_id(seq),"failure_class":class,"payloads":payloads,"evidence_tx_hashes":txs}),bond,true)?;
         let id = tx.result.as_u64().context("file_claim did not return ID")?;
         let claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
         ensure!(
@@ -460,14 +630,20 @@ impl<T: Transport> Engine<T> {
     pub fn challenge(&mut self, signer: &str, id: u64) -> Result<()> {
         let claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
         ensure!(
-            claim["run_id"] == self.journal.run_id && claim["status"] == "Pending",
+            claim["edge_id"]["run_id"] == self.journal.run_id && claim["status"] == "Pending",
             "claim not pending in this run"
         );
-        let bond = number(&self.parameters()?["challenge_bond"])?;
+        let edge = self
+            .transport
+            .view("get_edge", json!({"edge_id":claim["edge_id"]}))?;
+        let bond = number(&edge["parameters"]["challenge_bond"])?;
         self.submit(signer, "challenge", json!({"claim_id":id}), bond, true)?;
         let claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
         ensure!(
-            claim["status"] == "Challenged" && number(&claim["challenge_bond"])? == bond,
+            matches!(
+                claim["status"].as_str(),
+                Some("AdjudicatedUpheld" | "AdjudicatedOverturned")
+            ) && number(&claim["challenge_bond"])? == bond,
             "challenge view mismatch"
         );
         Ok(())
@@ -480,109 +656,9 @@ impl<T: Transport> Engine<T> {
         challenger: &str,
         registrar: &str,
     ) -> Result<()> {
-        let start = Instant::now();
-        let agents: Vec<String> = vec![reporter.into(), worker.into(), challenger.into()];
-        for a in &agents {
-            account(a)?;
-        }
-        account(registrar)?;
-        self.transport.check_signers(&agents)?;
-        self.transport.check_signers(&[registrar.into()])?;
-        let params = self.parameters()?;
-        ensure!(
-            number(&params["blame_bond"])? == NEAR / 4
-                && number(&params["challenge_bond"])? == NEAR / 4,
-            "S2 requires 0.25 NEAR bonds"
-        );
-        println!(
-            "S2 run={run} contract={} (creator funds 3 NEAR locked participation stakes)",
-            self.contract
-        );
-        self.register(run, registrar, &agents)?;
-        let task = json!({"assignment_seq":0,"worker":worker,"parent_assignment_seq":null});
-        self.anchor(reporter, "task_assigned", INPUT, task.clone())?;
-        self.anchor(worker, "settlement", OUTPUT, task)?;
-        let before = self.transport.snapshot(&agents)?;
-        let begin = self.journal.transactions.len();
-        // Persist the accounting baseline before risking the blame bond.
-        self.journal.proof = Some(json!({"before":before}));
-        self.save()?;
-        let id = self.file_claim(reporter, worker, "F1", &[0, 1])?;
-        let filed = self.transport.view("get_claim", json!({"claim_id":id}))?;
-        ensure!(
-            filed["challenge_deadline"]
-                .as_u64()
-                .context("missing deadline")?
-                .checked_sub(
-                    filed["claim_height"]
-                        .as_u64()
-                        .context("missing claim height")?
-                )
-                == Some(600),
-            "S2 requires the 600-block challenge window"
-        );
-        self.challenge(challenger, id)?;
-        let args = json!({"claim_id":id,"task_spec":STANDARD.encode(SPEC),"payloads":self.journal.events.iter().map(|e| json!({"seq":e["seq"],"bytes":e["payload_base64"]})).collect::<Vec<_>>()});
-        let preview = self.transport.view("preview_adjudication", args.clone())?;
-        self.journal.preview = Some(preview.clone());
-        self.save()?;
-        ensure!(
-            preview["verdict"] == "Overturned" && preview["finding"].is_null(),
-            "S2 preview must overturn with no finding"
-        );
-        println!("preview_adjudication Overturned finding=null");
-        let persisted = self.submit(challenger, "adjudicate", args, 0, false)?;
-        ensure!(
-            persisted.result == preview,
-            "persisted result differs from preview"
-        );
-        let claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
-        ensure!(
-            claim["status"] == "AdjudicatedOverturned" && claim["corrected_attribution"].is_null(),
-            "unexpected adjudication state"
-        );
-        self.transport.wait_after(
-            claim["challenge_deadline"]
-                .as_u64()
-                .context("missing deadline")?,
-        )?;
-        self.submit(reporter, "finalize", json!({"claim_id":id}), 0, false)?;
-        let after = self.transport.snapshot(&agents)?;
-        let final_claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
-        let final_run = self.transport.view("get_run", json!({"run_id":run}))?;
-        self.journal.proof = Some(
-            json!({"before":before,"after":after,"claim":final_claim,"run":final_run,"elapsed_ms":start.elapsed().as_millis()}),
-        );
-        self.save()?;
-        ensure!(
-            final_claim["status"] == "Finalized"
-                && number(&final_claim["bond"])? == 0
-                && number(&final_claim["challenge_bond"])? == 0,
-            "finalized bonds not cleared"
-        );
-        ensure!(
-            final_claim["corrected_attribution"].is_null(),
-            "unexpected corrected attribution"
-        );
-        for stake in final_run["agents"].as_array().context("missing stakes")? {
-            ensure!(number(&stake["locked_stake"])? == NEAR, "S2 stake changed");
-        }
-        let proof = verify_money(
-            &before,
-            &after,
-            &agents,
-            &self.journal.transactions[begin..],
-        )?;
-        self.journal.proof = Some(
-            json!({"before":before,"after":after,"verification":proof,"claim":final_claim,"run":final_run,"elapsed_ms":start.elapsed().as_millis()}),
-        );
-        self.save()?;
-        println!(
-            "S2 PASS case=3 reporter=-0.25 challenger=+0.20 treasury=+0.05 NEAR; reputation verified from starting scores; elapsed_ms={}",
-            start.elapsed().as_millis()
-        );
-        println!("Evidence: {}", self.path.as_ref().unwrap().display());
-        Ok(())
+        self.seeded_demo(
+            "s2", run, reporter, worker, challenger, challenger, registrar,
+        )
     }
     pub fn execute(&mut self, command: Command) -> Result<()> {
         let result = (|| match command {
@@ -620,6 +696,92 @@ impl<T: Transport> Engine<T> {
                     _ => bail!("worker and assignment-seq must be supplied together"),
                 };
                 self.anchor(&signer, &kind, &fs::read(payload)?, task)
+            }
+            Command::Offer {
+                run_id,
+                signer,
+                worker,
+                payload,
+                accept_deadline,
+                work_deadline,
+            } => {
+                self.open(&run_id, false)?;
+                let seq = self.offer(
+                    &signer,
+                    &worker,
+                    &fs::read(payload)?,
+                    accept_deadline,
+                    work_deadline,
+                )?;
+                println!("assignment_seq={seq}");
+                Ok(())
+            }
+            Command::Accept {
+                run_id,
+                signer,
+                assignment_seq,
+            } => {
+                self.open(&run_id, false)?;
+                self.accept(&signer, assignment_seq)
+            }
+            Command::Complete {
+                run_id,
+                signer,
+                assignment_seq,
+                payload,
+            } => {
+                self.open(&run_id, false)?;
+                self.anchor(&signer,"settlement",&fs::read(payload)?,json!({"assignment_seq":assignment_seq,"worker":signer,"parent_assignment_seq":null}))
+            }
+            Command::Release {
+                run_id,
+                signer,
+                assignment_seq,
+            } => {
+                self.open(&run_id, false)?;
+                self.release(&signer, assignment_seq)
+            }
+            Command::Finalize {
+                run_id,
+                signer,
+                claim_id,
+            } => {
+                self.open(&run_id, false)?;
+                self.submit(&signer, "finalize", json!({"claim_id":claim_id}), 0, false)?;
+                Ok(())
+            }
+            Command::Edge {
+                run_id,
+                assignment_seq,
+            } => {
+                let value = self.transport.view(
+                    "get_edge",
+                    json!({"edge_id":{"run_id":run_id,"assignment_seq":assignment_seq}}),
+                )?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+                Ok(())
+            }
+            Command::Preview { claim_id } => {
+                let value = self
+                    .transport
+                    .view("preview_adjudication", json!({"claim_id":claim_id}))?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+                Ok(())
+            }
+            Command::Balance { account_id } => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&self.balance(&account_id)?)?
+                );
+                Ok(())
+            }
+            Command::Withdraw {
+                run_id,
+                signer,
+                amount,
+            } => {
+                self.open(&run_id, false)?;
+                self.withdraw(&signer, amount)
             }
             Command::FileClaim {
                 run_id,

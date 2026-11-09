@@ -1,0 +1,3 @@
+# Historical v1 ABI test sources
+
+These cases describe the creator-funded run-stake ABI and separate adjudication/expiry/default-payout behavior. They are preserved as porting evidence, not executed against fresh-state v2. Active lifecycle and CLI integration suites replace them under tests/. In particular the old expiry-overturn and sponsor-funded money assertions must not be retained as v2 acceptance criteria. The new suites retain exact settlement, causal-order, independent integer vectors, reputation, ownership, replay, journal and rollback checks and add recovery/edge invariants. Historical pass counts are not current v2 evidence.

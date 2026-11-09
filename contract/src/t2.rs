@@ -44,7 +44,8 @@ pub struct EvidenceSnapshot {
     pub challenge_height: u64,
 }
 
-#[near(serializers = [json])]
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Payload {
     pub seq: u64,
@@ -146,6 +147,7 @@ pub enum Check {
     PreconditionFault,
     PostconditionFault,
     Passed,
+    Incomplete,
 }
 
 pub fn verify(spec: &TaskSpec, input: &[u8], output: Option<&[u8]>) -> Result<Check, &'static str> {
@@ -172,7 +174,9 @@ pub fn verify(spec: &TaskSpec, input: &[u8], output: Option<&[u8]>) -> Result<Ch
     if decimal(&ledger.declared_total) != Some(total) {
         return Ok(Check::PreconditionFault);
     }
-    let output = output.ok_or("missing completion; timeout verification is unsupported")?;
+    let Some(output) = output else {
+        return Ok(Check::Incomplete);
+    };
     // floor(total*bps/10000), without overflowing an otherwise valid u128 total.
     // Each partial product and the final sum are bounded by total (bps<=10000).
     let bps = u128::from(spec.fee_basis_points);

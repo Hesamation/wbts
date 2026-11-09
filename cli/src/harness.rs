@@ -78,10 +78,10 @@ impl<T: Transport> Engine<T> {
     ) -> Result<()> {
         let [coord, worker, watcher] = roles;
         let mut ids = vec![
-            registrar.to_owned(),
-            coord.to_owned(),
-            worker.to_owned(),
-            watcher.to_owned(),
+            registrar.to_string(),
+            coord.to_string(),
+            worker.to_string(),
+            watcher.to_string(),
         ];
         ids.sort();
         ids.dedup();
@@ -90,29 +90,27 @@ impl<T: Transport> Engine<T> {
         }
         let state = self.transport.snapshot(&ids)?;
         for id in &ids {
-            let bonds = if scenario == "s3" {
-                vec![]
-            } else if scenario == "s5" {
-                vec![worker, coord]
-            } else if scenario == "s1" {
-                vec![coord]
-            } else {
-                vec![coord, challenger]
-            };
-            let minimum = if id == registrar {
-                NEAR * 31 / 10
-                    + if bonds.contains(&id.as_str()) {
-                        NEAR * 3 / 10
-                    } else {
-                        0
-                    }
-            } else {
-                NEAR * 3 / 10
-            };
+            let mut principal = 0;
+            if id == coord {
+                principal += NEAR;
+            }
+            if id == worker {
+                principal += NEAR;
+            }
+            if scenario != "s3" {
+                if id == if scenario == "s5" { worker } else { coord } {
+                    principal += NEAR / 4;
+                }
+                if scenario != "s1" && id == if scenario == "s5" { coord } else { challenger } {
+                    principal += NEAR / 4;
+                }
+                if scenario == "s6" && (id == worker || id == coord) {
+                    principal += NEAR / 4;
+                }
+            }
             ensure!(
-                number(&state["accounts"][id]["amount"])? >= minimum + NEAR / 100,
-                "funding gate: {id} needs {} yoctoNEAR plus 0.01 NEAR gas headroom; no take started",
-                minimum
+                number(&state["accounts"][id]["amount"])? >= principal + NEAR / 2,
+                "funding gate: {id} requires independently funded collateral/bonds plus storage/gas headroom; no take started"
             );
         }
         Ok(())
@@ -150,47 +148,57 @@ impl<T: Transport> Engine<T> {
         challenger: &str,
         registrar: &str,
     ) -> Result<()> {
+        let start = Instant::now();
         ensure!(
-            matches!(scenario, "s1" | "s3" | "s5" | "s6"),
+            matches!(scenario, "s1" | "s2" | "s3" | "s5" | "s6"),
             "unsupported scenario"
         );
-        let start = Instant::now();
-        let agents = vec![coord.to_owned(), worker.to_owned(), watcher.to_owned()];
+        let agents = vec![coord.to_string(), worker.to_string(), watcher.to_string()];
         self.transport.check_signers(&agents)?;
         self.transport.check_signers(&[registrar.into()])?;
         let params = self.parameters()?;
         ensure!(
-            number(&params["blame_bond"])? == NEAR / 4
+            number(&params["stake"])? == NEAR
+                && number(&params["blame_bond"])? == NEAR / 4
                 && number(&params["challenge_bond"])? == NEAR / 4,
-            "expected 0.25 NEAR bonds"
+            "demo requires default economic terms"
         );
+        let mut ids = agents.clone();
+        ids.push(registrar.into());
+        ids.sort();
+        ids.dedup();
+        let economic_start = self.transport.snapshot(&ids)?;
+        let mut initial_credits = serde_json::Map::new();
+        for id in &ids {
+            initial_credits.insert(id.clone(), self.balance(id)?);
+        }
         self.register(run, registrar, &agents)?;
-        let task = json!({"assignment_seq":0,"worker":worker,"parent_assignment_seq":null});
-        self.anchor(
-            coord,
-            "task_assigned",
-            if matches!(scenario, "s5" | "s6") {
-                MALFORMED
-            } else {
-                INPUT
-            },
-            task.clone(),
-        )?;
+        let snap = self.transport.snapshot(&agents)?;
+        let height = snap["block_height"]
+            .as_u64()
+            .context("missing snapshot block height")?;
+        let input = if matches!(scenario, "s5" | "s6") {
+            MALFORMED
+        } else {
+            INPUT
+        };
+        let seq = self.offer(coord, worker, input, height + 100, height + 1000)?;
+        self.accept(worker, seq)?;
+        let task = json!({"assignment_seq":seq,"worker":worker,"parent_assignment_seq":null});
         self.anchor(
             worker,
             "settlement",
-            if scenario == "s3" { OUTPUT } else { WRONG },
+            if matches!(scenario, "s2" | "s3") {
+                OUTPUT
+            } else {
+                WRONG
+            },
             task,
         )?;
+        let before = self.transport.snapshot(&agents)?;
+        let mut claim = Value::Null;
         if scenario == "s3" {
-            let before = self.transport.snapshot(&agents)?;
             let chain = self.transport.view("get_run", json!({"run_id":run}))?;
-            ensure!(
-                self.transport
-                    .view("verify_chain", json!({"run_id":run}))?
-                    .is_null(),
-                "stored chain broken"
-            );
             ensure!(
                 verify_journal(&self.journal, &chain)?.is_none(),
                 "intact journal failed"
@@ -200,246 +208,240 @@ impl<T: Transport> Engine<T> {
             copy.events[1]["payload_base64"] = json!(STANDARD.encode(WRONG));
             let path = self.path.as_ref().unwrap().with_extension("tampered.json");
             fs::write(&path, serde_json::to_vec_pretty(&copy)?)?;
-            let mismatch = verify_journal(&copy, &chain)?.context("tamper not detected")?;
             ensure!(
-                mismatch.seq == 1 && mismatch.signer == worker,
-                "wrong tamper location"
+                verify_journal(&copy, &chain)?
+                    .context("tamper not detected")?
+                    .seq
+                    == 1,
+                "wrong mismatch location"
             );
             ensure!(
                 self.verify_run(run, Some(&path)).is_err(),
                 "edited copy accepted"
             );
-            let after = self.transport.snapshot(&agents)?;
-            for id in &agents {
+        } else {
+            let (reporter, blamed, class, defender) = if scenario == "s5" {
+                (worker, coord, "F3", coord)
+            } else {
+                (coord, worker, "F1", challenger)
+            };
+            let id = self.file_claim(reporter, blamed, class, &[0, 1])?;
+            if scenario != "s1" {
+                self.challenge(defender, id)?;
+                let preview = self
+                    .transport
+                    .view("preview_adjudication", json!({"claim_id":id}))?;
                 ensure!(
-                    before["accounts"][id]["amount"] == after["accounts"][id]["amount"],
-                    "diagnostic changed balance"
+                    preview["verdict"]
+                        == if scenario == "s5" {
+                            "Upheld"
+                        } else {
+                            "Overturned"
+                        },
+                    "wrong verdict"
+                );
+                if matches!(scenario, "s5" | "s6") {
+                    ensure!(
+                        preview["finding"]["agent"] == coord
+                            && preview["finding"]["failure_class"] == "F3",
+                        "wrong cause"
+                    );
+                } else {
+                    ensure!(preview["finding"].is_null(), "unexpected fault");
+                }
+                self.journal.preview = Some(preview);
+                self.save()?;
+            }
+            claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
+            self.transport.wait_after(
+                claim["challenge_deadline"]
+                    .as_u64()
+                    .context("missing deadline")?,
+            )?;
+            self.submit(reporter, "finalize", json!({"claim_id":id}), 0, false)?;
+            claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
+            ensure!(
+                claim["status"] == "Finalized"
+                    && number(&claim["bond"])? == 0
+                    && number(&claim["challenge_bond"])? == 0,
+                "settlement incomplete"
+            );
+            if scenario == "s6" {
+                let corrected = self.file_claim(worker, coord, "F3", &[0, 1])?;
+                self.challenge(coord, corrected)?;
+                let c = self
+                    .transport
+                    .view("get_claim", json!({"claim_id":corrected}))?;
+                ensure!(
+                    c["adjudication_result"]["verdict"] == "Upheld",
+                    "corrected claim failed"
+                );
+                self.transport.wait_after(
+                    c["challenge_deadline"]
+                        .as_u64()
+                        .context("missing deadline")?,
+                )?;
+                self.submit(worker, "finalize", json!({"claim_id":corrected}), 0, false)?;
+                self.journal.proof = Some(
+                    json!({"corrected_claim":self.transport.view("get_claim",json!({"claim_id":corrected}))?}),
                 );
             }
-            for field in ["reputations", "treasury"] {
-                ensure!(before[field] == after[field], "diagnostic changed {field}");
+        }
+        let edge = self
+            .transport
+            .view("get_edge", json!({"edge_id":self.edge_id(seq)}))?;
+        if edge["accepted_claim"].is_null() {
+            let window = edge["window"].as_u64().context("missing window")?;
+            let cutoff = edge["completion_height"]
+                .as_u64()
+                .context("missing height")?
+                + window;
+            self.transport
+                .wait_after(cutoff.max(edge["corrected_deadline"].as_u64().unwrap_or(0)))?;
+        }
+        self.release(coord, seq)?;
+        let released = self
+            .transport
+            .view("get_edge", json!({"edge_id":self.edge_id(seq)}))?;
+        ensure!(
+            released["released"] == true
+                && number(&released["delegator_reserved"])? == 0
+                && number(&released["worker_reserved"])? == 0,
+            "reservations not released"
+        );
+        let mut credits = serde_json::Map::new();
+        let mut ids = agents.clone();
+        ids.push(registrar.into());
+        ids.sort();
+        ids.dedup();
+        for id in &ids {
+            let c = self.balance(id)?;
+            if !c.is_null() {
+                credits.insert(id.clone(), c.clone());
+                let amount = number(&c["available"])?;
+                if amount > 0 {
+                    self.withdraw(id, amount)?;
+                }
             }
-            ensure!(
-                chain == self.transport.view("get_run", json!({"run_id":run}))?,
-                "diagnostic mutated run"
-            );
-            self.journal.proof = Some(
-                json!({"diagnostic_only":true,"mismatch":mismatch,"tampered_copy":path,"before":before,"after":after}),
-            );
-            self.save()?;
-            println!("S3 PASS diagnostic only; MISMATCH at seq 1 signer={worker}");
-            return Ok(());
         }
-        let before = self.transport.snapshot(&agents)?;
-        let begin = self.journal.transactions.len();
-        self.journal.proof = Some(json!({"before":before}));
-        self.save()?;
-        let (reporter, blamed, class, defender) = if scenario == "s5" {
-            (worker, coord, "F3", coord)
-        } else {
-            (coord, worker, "F1", challenger)
-        };
-        let id = self.file_claim(reporter, blamed, class, &[0, 1])?;
-        let filed = self.transport.view("get_claim", json!({"claim_id":id}))?;
-        let deadline = filed["challenge_deadline"]
-            .as_u64()
-            .context("missing deadline")?;
-        ensure!(
-            deadline
-                - filed["claim_height"]
-                    .as_u64()
-                    .context("missing claim height")?
-                == 600,
-            "expected 600-block challenge window"
-        );
-        if scenario != "s1" {
-            self.challenge(defender, id)?;
-            let args = json!({"claim_id":id,"task_spec":STANDARD.encode(SPEC),"payloads":self.journal.events[..2].iter().map(|e| json!({"seq":e["seq"],"bytes":e["payload_base64"]})).collect::<Vec<_>>()});
-            let preview = self.transport.view("preview_adjudication", args.clone())?;
-            ensure!(
-                preview["verdict"]
-                    == if scenario == "s5" {
-                        "Upheld"
+        let after = self.transport.snapshot(&ids)?;
+        let mut economic_rows = Vec::new();
+        for id in &ids {
+            let start = &initial_credits[id];
+            let end = self.balance(id)?;
+            let initial_credit = if start.is_null() {
+                0
+            } else {
+                number(&start["available"])?
+            };
+            let initial_storage = if start.is_null() {
+                0
+            } else {
+                number(&start["retained_storage_paid"])?
+            };
+            let gas = self
+                .journal
+                .transactions
+                .iter()
+                .filter(|t| &t.signer == id)
+                .try_fold(0u128, |sum, t| -> Result<u128> {
+                    sum.checked_add(t.gas_yocto.parse()?)
+                        .context("gas overflow")
+                })?;
+            let wallet = i128::try_from(number(&after["accounts"][id]["amount"])?)?
+                - i128::try_from(number(&economic_start["accounts"][id]["amount"])?)?;
+            let end_storage = if end.is_null() {
+                0
+            } else {
+                number(&end["retained_storage_paid"])?
+            };
+            let end_credit = if end.is_null() {
+                0
+            } else {
+                number(&end["available"])?
+            };
+            let storage = end_storage
+                .checked_sub(initial_storage)
+                .context("storage charges decreased")?;
+            let actual = wallet
+                + i128::try_from(gas)?
+                + i128::try_from(storage)?
+                + i128::try_from(end_credit)?
+                - i128::try_from(initial_credit)?;
+            let n = NEAR as i128;
+            let expected = match scenario {
+                "s1" => {
+                    if id == coord {
+                        n / 5
+                    } else if id == worker {
+                        -n / 4
                     } else {
-                        "Overturned"
-                    },
-                "verdict differs from ground truth"
-            );
-            ensure!(
-                preview["finding"]["agent"] == coord
-                    && preview["finding"]["failure_class"] == "F3"
-                    && preview["finding"]["origin"] == "Introduction",
-                "wrong decisive finding"
-            );
-            ensure!(
-                preview["origin"]
-                    == if scenario == "s5" {
-                        "Introduction"
+                        0
+                    }
+                }
+                "s2" => {
+                    if id == coord {
+                        -n / 4
+                    } else if id == challenger {
+                        n / 5
                     } else {
-                        "Propagation"
-                    },
-                "wrong causal origin"
-            );
-            self.journal.preview = Some(preview.clone());
-            self.save()?;
-            let persisted = self.submit(defender, "adjudicate", args, 0, false)?;
-            ensure!(persisted.result == preview, "persisted preview differs");
-            let adjudicated = self.transport.view("get_claim", json!({"claim_id":id}))?;
-            ensure!(
-                adjudicated["adjudication_result"] == preview
-                    && adjudicated["corrected_attribution"] == coord,
-                "stored finding differs"
-            );
-            ensure!(
-                adjudicated["status"]
-                    == if scenario == "s5" {
-                        "AdjudicatedUpheld"
+                        0
+                    }
+                }
+                "s3" => 0,
+                "s5" => {
+                    if id == coord {
+                        -n / 2
+                    } else if id == worker {
+                        n * 2 / 5
                     } else {
-                        "AdjudicatedOverturned"
-                    },
-                "stored verdict differs"
-            );
-        }
-        self.transport.wait_after(deadline)?;
-        self.submit(reporter, "finalize", json!({"claim_id":id}), 0, false)?;
-        let after = self.transport.snapshot(&agents)?;
-        let final_claim = self.transport.view("get_claim", json!({"claim_id":id}))?;
-        let final_run = self.transport.view("get_run", json!({"run_id":run}))?;
-        self.journal.proof =
-            Some(json!({"before":before,"after":after,"claim":final_claim,"run":final_run}));
-        self.save()?;
-        ensure!(
-            final_claim["status"] == "Finalized"
-                && number(&final_claim["bond"])? == 0
-                && number(&final_claim["challenge_bond"])? == 0,
-            "bonds not finalized"
-        );
-        ensure!(
-            final_claim["reporter"] == reporter
-                && final_claim["blamed"] == blamed
-                && final_claim["failure_class"] == class,
-            "finalized claim differs from seeded ground truth"
-        );
-        if scenario == "s1" {
+                        0
+                    }
+                }
+                "s6" => {
+                    if id == coord {
+                        -n * 3 / 4
+                    } else {
+                        (if id == worker { n * 2 / 5 } else { 0 })
+                            + (if id == challenger { n / 5 } else { 0 })
+                    }
+                }
+                _ => unreachable!(),
+            };
             ensure!(
-                final_claim["adjudication_result"].is_null(),
-                "S1 must remain unchallenged"
+                actual == expected,
+                "{id} lifecycle economic mismatch: {actual}, expected {expected}; concurrent activity invalidates proof"
             );
+            economic_rows.push(json!({"account":id,"economic_delta_yocto":actual.to_string(),"gas_yocto":gas.to_string(),"retained_storage_delta_yocto":storage.to_string(),"wallet_delta_yocto":wallet.to_string()}));
         }
-        let verification = verify_seeded_money(
-            scenario,
-            &before,
-            &after,
-            &agents,
-            defender,
-            &self.journal.transactions[begin..],
-        )?;
-        for agent in final_run["agents"].as_array().context("missing stakes")? {
-            let slash = scenario != "s6" && agent["account_id"] == blamed;
-            ensure!(
-                number(&agent["locked_stake"])? == if slash { NEAR * 3 / 4 } else { NEAR },
-                "incorrect stake slash"
-            );
-        }
+        let treasury_delta = number(&after["treasury"])?
+            .checked_sub(number(&economic_start["treasury"])?)
+            .context("treasury decreased")?;
         ensure!(
-            final_claim["corrected_attribution"]
-                == if scenario == "s1" {
-                    Value::Null
-                } else {
-                    json!(coord)
+            treasury_delta
+                == match scenario {
+                    "s3" => 0,
+                    "s5" => NEAR / 10,
+                    "s6" => NEAR * 15 / 100,
+                    _ => NEAR / 20,
                 },
-            "corrected attribution changed"
+            "treasury allocation mismatch"
         );
+        let corrected = self
+            .journal
+            .proof
+            .as_ref()
+            .map(|v| v["corrected_claim"].clone())
+            .unwrap_or(Value::Null);
         self.journal.proof = Some(
-            json!({"before":before,"after":after,"claim":final_claim,"run":final_run,"verification":verification,"elapsed_ms":start.elapsed().as_millis(),"ground_truth":if scenario == "s1" { "F1 worker; optimistic acceptance" } else { "F3 coordinator" }}),
+            json!({"before":before,"economic_start":economic_start,"economic_rows":economic_rows,"treasury_delta_yocto":treasury_delta.to_string(),"after":after,"claim":claim,"corrected_claim":corrected,"edge":released,"credits_before_withdraw":credits,"run":self.transport.view("get_run",json!({"run_id":run}))?,"elapsed_ms":start.elapsed().as_millis(),"storage_policy":"paid records retained; storage excluded from recovery","truth_policy":"unchallenged acceptance is optimistic"}),
         );
         self.save()?;
         println!(
-            "{} PASS state, economic balances, stakes and baseline-relative reputation verified; elapsed_ms={} Evidence: {}",
+            "{} PASS lifecycle: independent funding, settlement, release and confirmed withdrawals; evidence={}",
             scenario.to_uppercase(),
-            start.elapsed().as_millis(),
             self.path.as_ref().unwrap().display()
         );
         Ok(())
     }
-}
-
-fn verify_seeded_money(
-    scenario: &str,
-    before: &Value,
-    after: &Value,
-    agents: &[String],
-    challenger: &str,
-    txs: &[Tx],
-) -> Result<Value> {
-    let n = NEAR as i128;
-    let expected = match scenario {
-        "s1" => [n / 5, 0, 0], // Sponsor's locked stake loses 0.25 separately.
-        "s5" => [-n / 4, n * 2 / 5, 0],
-        "s6" if challenger == agents[1] => [-n / 4, n / 5, 0],
-        "s6" => [-n / 4, 0, n / 5],
-        _ => bail!("unsupported settlement"),
-    };
-    let mut rows = Vec::new();
-    for (i, id) in agents.iter().enumerate() {
-        let delta = i128::try_from(number(&after["accounts"][id]["amount"])?)?
-            - i128::try_from(number(&before["accounts"][id]["amount"])?)?;
-        let costs =
-            txs.iter()
-                .filter(|t| &t.signer == id)
-                .try_fold(0u128, |sum, t| -> Result<u128> {
-                    sum.checked_add(t.gas_yocto.parse()?)
-                        .and_then(|n| n.checked_add(t.storage_yocto.parse().ok()?))
-                        .context("cost overflow")
-                })?;
-        let economic = delta + i128::try_from(costs)?;
-        ensure!(
-            economic == expected[i],
-            "{id} economic mismatch: {economic} expected {}",
-            expected[i]
-        );
-        let base = before["reputations"][id]
-            .as_u64()
-            .context("missing reputation")?;
-        let wanted = match (scenario, i) {
-            ("s1", 1) | ("s5", 0) => base.saturating_sub(10),
-            ("s6", 0) => base.saturating_sub(15),
-            ("s6", 1) if challenger == id => ((base + 5).min(120) + 2).min(120),
-            ("s6", 1) => (base + 2).min(120),
-            ("s6", 2) if challenger == id => (base + 5).min(120),
-            _ => base,
-        };
-        ensure!(
-            after["reputations"][id] == wanted,
-            "{id} reputation mismatch"
-        );
-        rows.push(json!({"account":id,"economic_delta_yocto":economic.to_string(),"gas_and_storage_yocto":costs.to_string(),"reputation_before":base,"reputation_after":wanted}));
-    }
-    let treasury = number(&after["treasury"])? - number(&before["treasury"])?;
-    ensure!(
-        treasury
-            == if scenario == "s5" {
-                NEAR / 10
-            } else {
-                NEAR / 20
-            },
-        "treasury mismatch"
-    );
-    let payout = if scenario == "s5" {
-        NEAR * 65 / 100
-    } else {
-        NEAR * 45 / 100
-    };
-    ensure!(
-        payout + treasury
-            == if scenario == "s5" {
-                NEAR * 3 / 4
-            } else {
-                NEAR / 2
-            },
-        "conservation failed"
-    );
-    Ok(
-        json!({"roles":rows,"treasury_delta_yocto":treasury.to_string(),"payout_yocto":payout.to_string(),"stake_slash_yocto":if scenario == "s6" { "0".into() } else { (NEAR/4).to_string() }}),
-    )
 }

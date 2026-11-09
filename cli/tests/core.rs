@@ -18,7 +18,7 @@ fn account_and_storage_validation_reject_mainnet_and_unbounded_allowance() {
         vec![
             "cli",
             "--storage-allowance",
-            "100000000000000000000001",
+            "250000000000000000000001",
             "run-demo",
             "s2",
         ],
