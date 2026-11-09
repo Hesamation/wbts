@@ -32,6 +32,10 @@ pub struct Mismatch {
 /// Recompute stored-event links/head and compare each local payload commitment.
 /// The signer is the on-chain actor; a mismatch does not prove who edited a copy.
 pub fn verify_journal(journal: &Journal, run: &Value) -> Result<Option<Mismatch>> {
+    ensure!(
+        !journal.partial,
+        "participant journal lacks historical payloads; full verification unavailable"
+    );
     let events = run["events"].as_array().context("missing chain events")?;
     let mut head = String::new();
     for (i, value) in events.iter().enumerate() {

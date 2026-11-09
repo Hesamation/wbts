@@ -42,6 +42,11 @@ at filing. `challenge` persists adjudication atomically. `preview`, `finalize`, 
 available credit, in-flight transfer and retained paid storage; inspect edges for
 reserved collateral. `withdraw` requires a positive amount up to available credit,
 attaches exactly one yoctoNEAR and verifies the callback result and remaining credit.
+Accept/complete/challenge/finalize/release/withdraw can start from chain state on a
+separate participant machine without the creator’s journal. Such journals mark missing
+historical payload bytes explicitly and cannot claim full journal verification.
+Filing still requires exact producer evidence; availability before filing is not guaranteed.
+
 Failed transactions stop the command chain and preserve a failure record; inspect
 chain and journal before any manual retry.
 

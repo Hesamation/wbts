@@ -290,3 +290,85 @@ fn failed_command_saves_failure_without_submitting_later_steps() {
     assert!(result.is_err());
     assert!(e.journal.transactions.is_empty());
 }
+
+#[test]
+fn independent_participant_accepts_completes_and_challenges_without_creator_journal() {
+    let (mut creator, app) = setup();
+    creator
+        .execute(Command::Register {
+            run_id: Some("independent".into()),
+            signer: REPORTER.into(),
+            agents: vec![REPORTER.into(), WORKER.into(), CHALLENGER.into()],
+        })
+        .unwrap();
+    let h = creator.transport.0.height();
+    creator
+        .offer(REPORTER, WORKER, wbts_cli::INPUT, h + 100, h + 1000)
+        .unwrap();
+    let worker_dir = app.journal_dir.join("worker-machine");
+    let worker_app = App::parse_from([
+        "cli",
+        "--contract",
+        CONTRACT,
+        "--journal-dir",
+        worker_dir.to_str().unwrap(),
+        "run-demo",
+        "s2",
+    ]);
+    let mut worker = Engine::new(creator.transport, &worker_app).unwrap();
+    worker
+        .execute(Command::Accept {
+            run_id: "independent".into(),
+            signer: WORKER.into(),
+            assignment_seq: 0,
+        })
+        .unwrap();
+    let output = worker_dir.join("result.json");
+    std::fs::write(&output, wbts_cli::OUTPUT).unwrap();
+    worker
+        .execute(Command::Complete {
+            run_id: "independent".into(),
+            signer: WORKER.into(),
+            assignment_seq: 0,
+            payload: output,
+        })
+        .unwrap();
+    assert!(worker.journal.partial);
+    let run = worker
+        .transport
+        .view("get_run", json!({"run_id":"independent"}))
+        .unwrap();
+    assert!(wbts_cli::verify_journal(&worker.journal, &run).is_err());
+    // File a false allegation with authenticated producer bytes directly, independent of either local history.
+    let args = json!({"edge_id":{"run_id":"independent","assignment_seq":0},"failure_class":"F1","payloads":[{"seq":0,"bytes":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,wbts_cli::INPUT)},{"seq":1,"bytes":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,wbts_cli::OUTPUT)}],"evidence_tx_hashes":["11111111111111111111111111111111","11111111111111111111111111111111"]});
+    worker
+        .transport
+        .call(REPORTER, "file_claim", args, NEAR / 4, NEAR / 20)
+        .unwrap();
+    let watcher_dir = app.journal_dir.join("watcher-machine");
+    let watcher_app = App::parse_from([
+        "cli",
+        "--contract",
+        CONTRACT,
+        "--journal-dir",
+        watcher_dir.to_str().unwrap(),
+        "run-demo",
+        "s2",
+    ]);
+    let mut watcher = Engine::new(worker.transport, &watcher_app).unwrap();
+    watcher
+        .execute(Command::Challenge {
+            run_id: "independent".into(),
+            signer: CHALLENGER.into(),
+            claim_id: 0,
+        })
+        .unwrap();
+    assert!(watcher.journal.partial);
+    assert_eq!(
+        watcher
+            .transport
+            .view("get_claim", json!({"claim_id":0}))
+            .unwrap()["status"],
+        "AdjudicatedOverturned"
+    );
+}

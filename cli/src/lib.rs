@@ -295,6 +295,9 @@ pub struct Journal {
     pub contract: String,
     pub run_id: String,
     pub head: String,
+    /// True when historical payload bytes are unavailable in this participant journal.
+    #[serde(default)]
+    pub partial: bool,
     pub events: Vec<Value>,
     pub transactions: Vec<Tx>,
     pub preview: Option<Value>,
@@ -367,6 +370,38 @@ impl<T: Transport> Engine<T> {
                 "previous command failed; inspect journal and chain before continuing"
             );
         }
+        self.path = Some(path);
+        self.save()
+    }
+    // Non-filing participants need neither the creator's files nor its keys.
+    fn open_action(&mut self, run: &str) -> Result<()> {
+        ensure!(
+            !run.is_empty() && run.len() <= 128,
+            "run ID must have 1..128 bytes"
+        );
+        let path = self.dir.join(format!(
+            "{}.json",
+            hash(format!("{}:{run}", self.contract).as_bytes())
+        ));
+        if path.exists() {
+            return self.open(run, false);
+        }
+        let chain = self.transport.view("get_run", json!({"run_id":run}))?;
+        ensure!(!chain.is_null(), "unknown run");
+        let events=chain["events"].as_array().context("missing events")?.iter().map(|e|json!({"seq":e["seq"],"payload_hash":e["payload_hash"],"payload_base64":null,"tx_hash":null})).collect();
+        fs::create_dir_all(&self.dir)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        self.journal = Journal {
+            contract: self.contract.clone(),
+            run_id: run.into(),
+            head: chain["head_hash"].as_str().context("missing head")?.into(),
+            partial: true,
+            events,
+            ..Default::default()
+        };
         self.path = Some(path);
         self.save()
     }
@@ -614,6 +649,10 @@ impl<T: Transport> Engine<T> {
                 .events
                 .get(usize::try_from(*seq)?)
                 .context("evidence missing locally")?;
+            ensure!(
+                e["payload_base64"].is_string() && e["tx_hash"].is_string(),
+                "exact evidence bytes/references unavailable locally; obtain the producer journal before filing"
+            );
             payloads.push(json!({"seq":seq,"bytes":e["payload_base64"]}));
             txs.push(e["tx_hash"].clone());
         }
@@ -721,7 +760,7 @@ impl<T: Transport> Engine<T> {
                 signer,
                 assignment_seq,
             } => {
-                self.open(&run_id, false)?;
+                self.open_action(&run_id)?;
                 self.accept(&signer, assignment_seq)
             }
             Command::Complete {
@@ -730,7 +769,7 @@ impl<T: Transport> Engine<T> {
                 assignment_seq,
                 payload,
             } => {
-                self.open(&run_id, false)?;
+                self.open_action(&run_id)?;
                 self.anchor(&signer,"settlement",&fs::read(payload)?,json!({"assignment_seq":assignment_seq,"worker":signer,"parent_assignment_seq":null}))
             }
             Command::Release {
@@ -738,7 +777,7 @@ impl<T: Transport> Engine<T> {
                 signer,
                 assignment_seq,
             } => {
-                self.open(&run_id, false)?;
+                self.open_action(&run_id)?;
                 self.release(&signer, assignment_seq)
             }
             Command::Finalize {
@@ -746,7 +785,7 @@ impl<T: Transport> Engine<T> {
                 signer,
                 claim_id,
             } => {
-                self.open(&run_id, false)?;
+                self.open_action(&run_id)?;
                 self.submit(&signer, "finalize", json!({"claim_id":claim_id}), 0, false)?;
                 Ok(())
             }
@@ -780,7 +819,7 @@ impl<T: Transport> Engine<T> {
                 signer,
                 amount,
             } => {
-                self.open(&run_id, false)?;
+                self.open_action(&run_id)?;
                 self.withdraw(&signer, amount)
             }
             Command::FileClaim {
@@ -800,7 +839,7 @@ impl<T: Transport> Engine<T> {
                 signer,
                 claim_id,
             } => {
-                self.open(&run_id, false)?;
+                self.open_action(&run_id)?;
                 self.challenge(&signer, claim_id)
             }
             Command::VerifyRun { run_id, journal } => self.verify_run(&run_id, journal.as_deref()),
