@@ -1,5 +1,8 @@
 # Who Broke the Swarm
 
+Continuing this project without prior context? Read [START-HERE.md](START-HERE.md)
+for the current implementation boundary, research objections and continuation options.
+
 Staked attribution on tamper-evident run logs, using the optimistic challenge model
 with deterministic adjudication for direct T2 F3/F1 claims.
 

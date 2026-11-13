@@ -1,0 +1,66 @@
+{
+  "kind": "simulator fixture measurements, not deployed results or full eager-escrow comparison",
+  "source_commits": [
+    "b8e811c",
+    "aa1f531"
+  ],
+  "gas_floor_near_per_tgas": 0.0001,
+  "storage_near_per_byte": 1e-05,
+  "fixtures": [
+    {
+      "fixture": "valid-small",
+      "input_bytes": 62,
+      "output_bytes": 28,
+      "file_gas": 2983259415658,
+      "file_storage_bytes": 656,
+      "check_transaction_gas": 2181065594216,
+      "challenge_gas": 3030322838495,
+      "finalize_gas": 3099397959330,
+      "disputed_path_gas": 9112980213483,
+      "check_near_at_floor": 0.0002181065594216,
+      "filing_retained_storage_near": 0.00656
+    },
+    {
+      "fixture": "bad-output",
+      "input_bytes": 62,
+      "output_bytes": 5,
+      "file_gas": 2978746643806,
+      "file_storage_bytes": 633,
+      "check_transaction_gas": 2189154879073,
+      "challenge_gas": 3039582574963,
+      "finalize_gas": 2771419972450,
+      "disputed_path_gas": 8789749191219,
+      "check_near_at_floor": 0.0002189154879073,
+      "filing_retained_storage_near": 0.00633
+    },
+    {
+      "fixture": "invalid-input",
+      "input_bytes": 9,
+      "output_bytes": 28,
+      "file_gas": 2971790242150,
+      "file_storage_bytes": 603,
+      "check_transaction_gas": 2175488179135,
+      "challenge_gas": 3023664011803,
+      "finalize_gas": 3106220691134,
+      "disputed_path_gas": 9101674945087,
+      "check_near_at_floor": 0.0002175488179135,
+      "filing_retained_storage_near": 0.00603
+    },
+    {
+      "fixture": "valid-128-padded",
+      "input_bytes": 8192,
+      "output_bytes": 23,
+      "file_gas": 4619388992146,
+      "file_storage_bytes": 8781,
+      "check_transaction_gas": 2808638281931,
+      "challenge_gas": 4264835673317,
+      "finalize_gas": 3836895413249,
+      "disputed_path_gas": 12721120078712,
+      "check_near_at_floor": 0.0002808638281931,
+      "filing_retained_storage_near": 0.08781
+    }
+  ],
+  "false_claim_pre_fee_detection_threshold": 0.4444444444444445,
+  "monitoring_max_budget_near_per_inspected_claim_if_invalid_fraction_0_001_and_solo_winner": 0.0002,
+  "probe": "project/research/mechanism-cost-probe.rs"
+}

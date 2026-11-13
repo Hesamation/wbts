@@ -1,0 +1,18 @@
+{
+  "prepared": "2026-11-13",
+  "implementation_baseline": "aa1f531164351e9de832758aeb9f7cf568e42c78",
+  "assets": [
+    {
+      "file": "mechanism-cost-probe.rs",
+      "original_planning_path": "project/research/mechanism-cost-probe.rs",
+      "sha256": "7a6860eb8033e470445e77b3912b7f07f187ffa81aa5a660f71ebe2362499dc6",
+      "kind": "preserved historical research, not rerun November 13"
+    },
+    {
+      "file": "mechanism-measurements-20261109.json",
+      "original_planning_path": "project/MECHANISM-MEASUREMENTS-20261109.json",
+      "sha256": "2f85b5627946341bbce887820cd8099535937978d67a142fe35f257dbc1788ab",
+      "kind": "preserved historical research, not rerun November 13"
+    }
+  ]
+}

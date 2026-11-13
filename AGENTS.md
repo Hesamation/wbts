@@ -1,3 +1,10 @@
+> **Standalone handoff, 2026-11-13:** read [START-HERE.md](START-HERE.md) first.
+> The body below is historical. Where its ABI, funding, scope, status or process
+> notes conflict with the v2 source/current handoff, use the latter for facts and
+> the latest explicit human instructions for authority. Do not reinstate batch
+> approval/documentation ceremonies. This handoff preparation alone does not
+> authorize a new implementation, policy change, deployment or public release.
+
 # AGENTS.md — Who Broke the Swarm (updated 2026-11-08)
 
 ## Goal and authority
