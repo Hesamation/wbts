@@ -1,7 +1,7 @@
 # FactSettle execution room
 
-[Open the hosted demo](https://factsettle.memorabletulip2.chatgpt.site) or the
-[two-minute judge guide](https://factsettle.memorabletulip2.chatgpt.site/guide.html).
+[Open the hosted demo](https://hesamation.github.io/wbts/) or the
+[two-minute judge guide](https://hesamation.github.io/wbts/guide.html).
 No wallet, sign-in or API key is needed.
 
 From the repository root, with Python 3 installed:

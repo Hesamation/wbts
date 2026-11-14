@@ -12,8 +12,8 @@ withdrawable credit, with a checked transfer callback.
 
 ## Judges: start here
 
-**[Try the hosted demo](https://factsettle.memorabletulip2.chatgpt.site)** ·
-[Two-minute judge guide](https://factsettle.memorabletulip2.chatgpt.site/guide.html) ·
+**[Try the hosted demo](https://hesamation.github.io/wbts/)** ·
+[Two-minute judge guide](https://hesamation.github.io/wbts/guide.html) ·
 [Execution manifest](demo/evidence/manifest.json)
 
 Start with **Buyer won't approve**: the seller receives the agreed payment without
