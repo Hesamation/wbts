@@ -1,0 +1,49 @@
+{
+  "cases": [
+    {
+      "description": "Valid proofs release payment without a buyer approval transaction.",
+      "file": "buyer-disappears.json",
+      "id": "buyer-disappears",
+      "sha256": "6c8d62fe69f4d0b57dc5c607f1ea94685f82b794c794cef7250d4380638ce690",
+      "title": "Buyer won't approve"
+    },
+    {
+      "description": "The proof fails. No job payment moves; expiry refunds the buyer.",
+      "file": "forged-answer.json",
+      "id": "forged-answer",
+      "sha256": "f2de07257387d04df7a5977e2b6030d9582089fc78704ef904b27094372dd1b0",
+      "title": "Seller invents a value"
+    },
+    {
+      "description": "The specialist earns only the delivered fact's share. The remainder is refunded.",
+      "file": "partial-delivery.json",
+      "id": "partial-delivery",
+      "sha256": "234fac62c3b9a9bd99bf10ef1d9afd8c1d232a0c2d86566c617ea0e71a89accf",
+      "title": "One fact never arrives"
+    },
+    {
+      "description": "An authenticated empty slot refunds that fact immediately.",
+      "file": "proven-absence.json",
+      "id": "proven-absence",
+      "sha256": "ccbeddb99c9f599b85ab7e1d57409dfc443f00e4dfda823f0779fdf232153a2f",
+      "title": "The dataset has no answer"
+    },
+    {
+      "description": "Anyone can close an expired offer and credit the full price back to the buyer.",
+      "file": "seller-disappears.json",
+      "id": "seller-disappears",
+      "sha256": "6feea11452e196933d7ca6791cf23212362134cbadc7b49ec87ea26e6d20601a",
+      "title": "Seller never accepts"
+    },
+    {
+      "description": "An unaccepted offer can be cancelled. Late acceptance cannot revive it.",
+      "file": "buyer-cancels.json",
+      "id": "buyer-cancels",
+      "sha256": "c100c6a39779bf91c02272d79ddb91e8588db1061aaebee0ac0515df0b4ba89f",
+      "title": "Buyer cancels an offer"
+    }
+  ],
+  "environment": "local NEAR contract simulator",
+  "schema_version": 1,
+  "wasm_sha256": "2349c6d727cef4c26655ce8e8bbd5626dc6be12086e1599bd0507146f389f887"
+}

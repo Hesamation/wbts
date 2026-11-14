@@ -1,0 +1,11 @@
+{
+  "scope": "Earlier November 14 review of supplied prebuilt WASM on local sandbox; not rerun in this integration",
+  "arena1_receipt_wasm": {
+    "valid_recorded_receipt": "ok",
+    "changed_request_rejected": true,
+    "changed_request_reason": "signer_not_registered:0x377ec395418e11d2714ddbb5419adba86b736898",
+    "owner_registered_key": true,
+    "fresh_model_call": false,
+    "tdx_quote_verification_repeated": false
+  }
+}

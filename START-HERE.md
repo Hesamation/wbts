@@ -1,4 +1,13 @@
-# Who Broke the Swarm — standalone continuation guide
+> **Current continuation — November 14, 2026:** the human assigned full project
+> responsibility and instructed the lead to investigate, choose and finish the
+> strongest submission path. The current build is **proof-backed data-job escrow**.
+> Read the [current README](README.md), [contract/client guide](data-escrow/README.md)
+> and [execution room](demo/README.md). The T2 contract is preserved unchanged.
+> The paused status and continuation choices below describe the earlier baseline.
+> Publication, deployment and submission require their applicable authorization;
+> historical receipts do not demonstrate the new contract.
+
+# Who Broke the Swarm — historical standalone continuation guide
 
 Prepared November 13, 2026. Read this before old plans, local STATUS files or agent proposals. This guide is for an agent with **only this repository**, no prior conversation and no access to the private planning workspace. No other project is needed to understand or continue this one.
 
@@ -7,6 +16,14 @@ Prepared November 13, 2026. Read this before old plans, local STATUS files or ag
 WBTS was set aside because its demonstrated task and optimistic dispute policy did not establish a practical advantage over capable escrow and straightforward checking. That is a substantive product/mechanism objection, not just weak marketing. It is also **not a proof that accountable delegation has no useful future**. This guide explains both sides and gives concrete ways to move forward.
 
 This handoff preparation does not itself resume implementation, choose an extension or authorize deployment. The human can assign this repository to a new builder using the launch prompt at the end. Once implementation is assigned, work continuously through relevant tests and demo preparation; do not impose repeated batch approval or documentation ceremonies.
+
+## Latest closeout — November 14, 2026
+
+**WBTS remains paused and preserved.** The human requested integrating Arena research 1 before setting this investigation aside. Its [report, complete source/results archive and review findings](handoff/arena1-20261114/README.md) are now included in this repository. No contract/CLI changes or new WBTS implementation are authorized by this closeout.
+
+The new lead is an eager evaluator escrow using NEAR AI Cloud response signatures, explicit input-fault compensation and a response-byte reveal window. Earlier review independently checked recorded signatures and exercised the supplied verifier WASM. This supplies a working narrow verifier under an owner-registered-key trust model; it does not validate the relay's practical demand or an advantage over capable escrow. It is not a WBTS port, a fresh model call or general reasoning verification. Read the integrated review before treating the original report's measurements/claims as established.
+
+No further research or engineering is required to **park WBTS properly**. A future revival still needs one useful job and a demonstrated operational benefit; neither UI polish nor another model opinion resolves that. This is a closeout of the current investigation, not a declaration that all possible WBTS directions are worthless.
 
 ## 1. Read these first; avoid the historical traps
 

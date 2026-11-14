@@ -1,0 +1,51 @@
+{
+ "checked_at": "2026-11-14T08:02:08.836Z",
+ "live_attestation": {
+  "file": "probe/live/attestation_qwen38_ecdsa.json",
+  "sha256": "debb888a7bda41d9310e82164ae8e21a35bde74478daa5e99175515e995ca984",
+  "model": "Qwen/Qwen3.8-27B",
+  "model_signing_addresses": [
+   "0x835ab53d20294ef795906dff21ae4c045336aa26"
+  ],
+  "gateway_signing_address": "0xb98a789cdc4817275f5155593ba73ef2a957e779",
+  "request_nonce": "c5fe1e4cc9c65b3b6331ef6397394feec8e9c8aee1ba78ba310f4e7d600b87c1"
+ },
+ "bundles": [
+  {
+   "name": "demo-receipt-bundle.json",
+   "model": "Qwen/Qwen3.8-27B",
+   "signature_kind": "provider_tee",
+   "request_bytes": 185,
+   "response_bytes": 900,
+   "request_hash_matches_bytes": true,
+   "response_hash_matches_bytes": true,
+   "signed_text_matches_bytes": true,
+   "recovered_address": "0x835ab53d20294ef795906dff21ae4c045336aa26",
+   "recovered_equals_claimed_signer": true,
+   "signer_listed_in_live_attestation_2026_11_14": true,
+   "request_model_field": "Qwen/Qwen3.8-27B",
+   "request_stream_field": false,
+   "response_id_equals_chat_id": true,
+   "response_finish_reason": "stop",
+   "created_at": "2026-11-01T16:51:32.540Z"
+  },
+  {
+   "name": "testnet-receipt-bundle.json",
+   "model": "Qwen/Qwen3.8-27B",
+   "signature_kind": "provider_tee",
+   "request_bytes": 143,
+   "response_bytes": 493,
+   "request_hash_matches_bytes": true,
+   "response_hash_matches_bytes": true,
+   "signed_text_matches_bytes": true,
+   "recovered_address": "0x835ab53d20294ef795906dff21ae4c045336aa26",
+   "recovered_equals_claimed_signer": true,
+   "signer_listed_in_live_attestation_2026_11_14": true,
+   "request_model_field": "Qwen/Qwen3.8-27B",
+   "request_stream_field": false,
+   "response_id_equals_chat_id": true,
+   "response_finish_reason": "length",
+   "created_at": "2026-11-01T16:56:21.632Z"
+  }
+ ]
+}

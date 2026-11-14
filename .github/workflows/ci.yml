@@ -19,6 +19,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check CLI verifier identity
         run: python3 scripts/sync-verifier-pin.py --check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
       - name: Install native dependencies
         run: |
           sudo apt-get update
@@ -31,11 +34,16 @@ jobs:
       - name: Build contract and test simulator
         run: |
           cargo near build non-reproducible-wasm --manifest-path contract/Cargo.toml --locked
+          cargo near build non-reproducible-wasm --manifest-path data-escrow/Cargo.toml --locked
+          node data-escrow/compat/generate.mjs
           cargo test --manifest-path swarm-tests/Cargo.toml --locked --tests -- --test-threads=2
+          cargo run --manifest-path swarm-tests/Cargo.toml --locked --example data_demo -- demo/evidence
+          python3 scripts/check-data-demo.py
       - name: Clippy
         run: |
           cargo clippy --manifest-path contract/Cargo.toml --locked --target wasm32-unknown-unknown
           cargo clippy --manifest-path swarm-tests/Cargo.toml --locked --all-targets
+          cargo clippy --manifest-path data-escrow/Cargo.toml --locked --target wasm32-unknown-unknown -- -D warnings
 
   cli:
     runs-on: ubuntu-24.04

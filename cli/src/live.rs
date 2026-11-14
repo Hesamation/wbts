@@ -27,11 +27,19 @@ pub struct Live {
 
 impl Live {
     pub fn connect(app: &App) -> Result<Self> {
+        Self::connect_testnet(
+            app.rpc_url.clone(),
+            app.contract.clone(),
+            app.journal_dir.join("transactions"),
+        )
+    }
+    pub fn connect_testnet(url: String, contract: String, dir: PathBuf) -> Result<Self> {
+        account(&contract)?;
         let mut live = Self {
             client: Client::builder().timeout(Duration::from_secs(45)).build()?,
-            url: app.rpc_url.clone(),
-            contract: app.contract.clone(),
-            dir: app.journal_dir.join("transactions"),
+            url,
+            contract,
+            dir,
             keys: BTreeMap::new(),
             storage_byte_cost: 0,
         };
@@ -218,6 +226,47 @@ impl Transport for Live {
         principal: u128,
         allowance: u128,
     ) -> Result<Tx> {
+        self.submit(signer, method, args, principal, allowance, false)
+    }
+}
+
+impl Live {
+    /// Exact deployed-code pin checked before a data client submits any transaction.
+    pub fn require_code_hash(&self, expected: &str) -> Result<()> {
+        let code = self.rpc(
+            "query",
+            json!({"request_type":"view_code","account_id":self.contract,"finality":"final"}),
+        )?;
+        let bytes = STANDARD.decode(
+            code["code_base64"]
+                .as_str()
+                .context("missing deployed code")?,
+        )?;
+        ensure!(
+            crate::hash(&bytes) == expected,
+            "deployed code differs from supplied WASM; refusing to sign"
+        );
+        Ok(())
+    }
+    pub fn call_data(
+        &mut self,
+        signer: &str,
+        method: &str,
+        args: Value,
+        principal: u128,
+        allowance: u128,
+    ) -> Result<Tx> {
+        self.submit(signer, method, args, principal, allowance, true)
+    }
+    fn submit(
+        &mut self,
+        signer: &str,
+        method: &str,
+        args: Value,
+        principal: u128,
+        allowance: u128,
+        data_mode: bool,
+    ) -> Result<Tx> {
         account(signer)?;
         // Recheck chain identity before every signature, including after a long wait.
         ensure!(
@@ -383,10 +432,16 @@ impl Transport for Live {
                 .checked_sub(prior)
                 .context("credit decreased during funding")?;
             ensure!(
-                delta == allowance - storage,
+                delta
+                    == allowance - storage
+                        + if data_mode && method == "deliver" {
+                            number(&result["seller_credit"])?
+                        } else {
+                            0
+                        },
                 "excess credit reconciliation failed; concurrent activity invalidates measurement"
             );
-            delta
+            allowance - storage
         } else {
             0
         };

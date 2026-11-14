@@ -8,6 +8,10 @@ Use the latest explicit human instructions for authority; use current executable
 
 Separate (1) source/documentation claims, (2) inspected code, (3) executed simulation, (4) live chain observation and (5) customer demand. None substitutes automatically for the next. Report dates, versions and trust boundaries. Do not treat bounded searches with no result as proof of no market or no prior art.
 
+## November 14 update — Arena research 1
+
+The [integrated Arena 1 package](arena1-20261114/README.md) adds a separate receipt-verification probe, its original report/archive and the earlier review's narrow signature/WASM checks. This advances verifier readiness for an attested-service trust model. It does not reopen or validate optimistic cryptographic inference proof economics, and it leaves relay demand, same-capability escrow differentiation and adversarial privacy unresolved. The full comparison matrix/TDX verification were not independently repeated. WBTS remains paused; no implementation or deployment follows from this preservation.
+
 ## 1. Mechanism and economics
 
 | Source | Prior finding / why consult it | Limit |

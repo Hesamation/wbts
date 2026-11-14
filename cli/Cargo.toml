@@ -3,10 +3,15 @@ name = "wbts-cli"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "cli"
 
 [[bin]]
 name = "cli"
 path = "src/main.rs"
+
+[[bin]]
+name = "data-cli"
+path = "src/data_main.rs"
 
 [dependencies]
 anyhow = "1"

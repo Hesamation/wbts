@@ -1,6 +1,8 @@
 # Rust
 target/
 .wbts/
+.wbts-data/
+__pycache__/
 Cargo.lock.bak
 
 # Keys / credentials (NEVER commit)

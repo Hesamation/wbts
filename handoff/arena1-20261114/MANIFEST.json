@@ -1,0 +1,32 @@
+{
+  "integrated": "2026-11-14",
+  "source": "supplied last-day research reports and earlier review evidence",
+  "preserved": [
+    {
+      "file": "REPORT.md",
+      "original_relative_path": "arena-research-1.md",
+      "sha256": "22ee2ad0be180928e0b60c38fda4cc4f8ff40c58a100d4297b0ce4283d4efd7d"
+    },
+    {
+      "file": "research.zip",
+      "original_relative_path": "research.zip",
+      "sha256": "807105895399936e1e17af6624c49db80963aa35160bd01e1d91ee99aadeba1e"
+    },
+    {
+      "file": "offchain-fixtures-rechecked.json",
+      "original_relative_path": "review-evidence/arena1-offchain-fixtures-rechecked.json",
+      "sha256": "9583bdd849935de300e9b4e7e8b1c2515e46f944830fe4f9d363f6b40d3bfe64"
+    }
+  ],
+  "independently_checked_earlier": [
+    "two recorded receipt hashes and EIP-191 recovery",
+    "supplied WASM accepts recorded receipt; altered request rejected"
+  ],
+  "not_repeated": [
+    "full 42-scenario matrix",
+    "TDX collateral/quote verification",
+    "source-to-WASM rebuild",
+    "fresh model completion",
+    "WBTS integration or regression suite"
+  ]
+}

@@ -1,3 +1,4 @@
+pub mod data;
 mod harness;
 pub mod live;
 pub use harness::{Mismatch, verify_journal};
