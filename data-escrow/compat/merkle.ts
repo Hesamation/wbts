@@ -119,4 +119,3 @@ function sha256(...parts: readonly Uint8Array[]): Hash {
   if (!isHash(hex)) throw new Error("sha256 did not return 64 hex characters");
   return hex;
 }
-
