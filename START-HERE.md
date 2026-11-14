@@ -292,6 +292,8 @@ Claims that remain prohibited without new evidence: general agent-reasoning veri
 
 ## 11. Ready-to-paste standalone launch prompt
 
+For optional external investigations before choosing a build, see [specialist research briefs](handoff/EXTERNAL-RESEARCH-BRIEFS.md): WBTS reconstruction, a fresh swarm workflow and a track-opportunity scout. They assume heavy agent-assisted execution and a demo, with no preset developer-day rejection. These are assignments for the human to launch, not workers already started.
+
 The human should paste this when actually assigning continuation; its presence in the repository is not authorization by itself:
 
 > Read START-HERE.md, handoff/RESEARCH.md, the v2 contract/CLI guides and relevant source. You are taking WBTS forward from this baseline, not reconstructing our previous conversation. Challenge both the positive and negative conclusions with concrete evidence. Aim for its strongest credible, finishable hackathon submission; do not preserve sunk-cost features or invent winning odds.
