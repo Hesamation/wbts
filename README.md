@@ -184,10 +184,10 @@ false unchallenged claims can become final. The new `data-escrow/` contract is a
 fresh-state successor with eager proof checks and job-price settlement; it does
 not migrate prior stakes, state or deployments. [Historical handoff](WBTS-HISTORY.md).
 
-Another project by the same solo developer is **Where's the Rest?**, a NEAR-to-Base
-payout investigation tool. It is a separate codebase and product; no payout-reader
-implementation is included here. This disclosure supports the event's independent
-multiple-project rule and does not assert submission of either project.
+Another project by the same solo developer is **[Where's the Rest?](https://github.com/Hesamation/wheres-the-rest)**,
+a NEAR-to-Base payout investigation tool. It is a separate codebase and product; no
+payout-reader implementation is included here. This disclosure supports the event's
+independent multiple-project rule and does not assert submission of either project.
 
 Built during NEAR HACKATHON with Codex assistance. The Rust contract uses near-sdk;
 tests use pinned near-contract-sim; the client uses the libraries listed in
