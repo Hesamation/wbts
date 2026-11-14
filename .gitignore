@@ -31,3 +31,6 @@ Thumbs.db
 /STATUS.md
 /submission.json
 /CLAIMS.md
+
+# Local video production workspace (assets, API key, renders)
+/video/
