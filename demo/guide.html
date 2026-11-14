@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Review FactSettle in two minutes: follow a recorded NEAR data purchase, inspect payment and refunds, and independently check a proof.">
+  <title>Judge guide — FactSettle</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#guide">Skip to the guide</a>
+  <header class="topbar wrap">
+    <a class="brand" href="./" aria-label="FactSettle home"><span class="brand-mark" aria-hidden="true">f/</span><span>FactSettle<span class="brand-dot">.</span></span></a>
+    <div class="top-right"><span class="environment">RECORDED LOCAL NEAR RUNS</span><a href="./">Open the demo ↗</a></div>
+  </header>
+  <main id="guide" class="guide wrap">
+    <p class="eyebrow">THE TWO-MINUTE JUDGE GUIDE</p>
+    <h1>Follow one deal.<br>Inspect what happened.</h1>
+    <p class="lede">A data specialist should not deliver first and then hope the buyer pays. FactSettle holds the price on NEAR and checks each proof before allocating payment.</p>
+    <p class="callout">No wallet, sign-in or API key. These are recorded executions of the compiled contract in a local NEAR simulator, with constructed public data and distinct scripted signing accounts. Opening this demo sends no transactions.</p>
+    <article>
+      <h2>1. See the complete payment</h2>
+      <p><a href="./#buyer-disappears">Open “Buyer won't approve” →</a> The specialist earns 0.02 virtual NEAR for two valid fact openings, with no buyer approval transaction.</p>
+      <ol>
+        <li>Press <strong>Fund</strong>: the buyer's job price is locked.</li>
+        <li>Press <strong>Accept</strong>: the named seller accepts the agreed dataset, keys and deadlines.</li>
+        <li>Press <strong>Deliver</strong>: the contract has checked both openings and credited the seller's shares.</li>
+        <li>Press <strong>Withdraw</strong>: the recorded transfers and callbacks have completed. The final wallet table separates payment, gas, retained storage and net wallet changes.</li>
+      </ol>
+      <p>“Seller payment” is the job allocation, not profit. Retained storage is substantial for this illustrative small purchase.</p>
+    </article>
+    <article>
+      <h2>2. Try the two failure cases</h2>
+      <p><a href="./#forged-answer"><strong>Seller invents a value</strong> →</a> The altered opening is rejected. It earns no job payment; expiry credits the price back to the buyer, who withdraws it.</p>
+      <p><a href="./#partial-delivery"><strong>One fact never arrives</strong> →</a> A delivered fact earns only its agreed share. An observer closes the expired remainder; the buyer receives that share back.</p>
+      <p>The other records cover proven absence, a seller that never accepts and buyer cancellation before acceptance.</p>
+    </article>
+    <article>
+      <h2>3. Check the proof yourself</h2>
+      <p>Return to the <a href="./#buyer-disappears">valid-delivery case</a> and scroll to <strong>Change a value. Check again.</strong> The original value matches the root. Edit it, press <strong>Check proof</strong>, and see the mismatch.</p>
+      <p>Your browser independently hashes the opening through all 32 Merkle levels. This edits only the browser check. The recorded rejection case above is a separate contract execution.</p>
+      <p class="callout">A proof establishes consistency with the seller's committed dataset. The buyer must choose a dataset it trusts. It does not establish external truth, source authenticity, answer quality or fresh AI inference. Delivered entries and their proofs are public.</p>
+    </article>
+    <article>
+      <h2>What NEAR does here</h2>
+      <p>NEAR authenticates callers, holds the buyer-funded escrow, checks proofs and allocates credit atomically. Block deadlines allow unfinished work to be refunded. Transfers use private, nonce-checked callbacks so a failed transfer can restore credit.</p>
+      <p>No additional buyer approval is required after a valid delivery. Expiry still requires a caller; there is no background keeper. If the callback itself fails, a withdrawal can remain ambiguous and pending; there is no blind retry or administrative rescue promise.</p>
+      <p>This is a focused implementation of proof-verifying escrow for agent data jobs. The participants are scripted; the project does not claim live customers, a general agent marketplace or autonomous reasoning verification.</p>
+    </article>
+    <article>
+      <h2>Inspect the execution records</h2>
+      <p>The viewer checks each record's SHA-256 against the manifest before rendering. The manifest also identifies the executed WASM. These checks establish consistency with the bundled records, not independent chain inclusion or an audit.</p>
+      <div class="evidence-list">
+        <a href="evidence/manifest.json">Manifest and executed WASM digest ↗</a>
+        <a href="evidence/buyer-disappears.json" download>Complete payment record ↓</a>
+        <a href="evidence/forged-answer.json" download>Rejected answer record ↓</a>
+        <a href="evidence/partial-delivery.json" download>Partial delivery and refund ↓</a>
+        <a href="evidence/proven-absence.json" download>Proven absence record ↓</a>
+        <a href="evidence/seller-disappears.json" download>Unaccepted offer record ↓</a>
+        <a href="evidence/buyer-cancels.json" download>Cancellation record ↓</a>
+        <a href="THIRD_PARTY_NOTICES.md">Upstream attribution and sample provenance ↗</a>
+      </div>
+      <p>Six executions contain 39 signed calls, six proof attempts and two expected rejections. Each record includes per-call receipts, job state, final accounting, wallet reconciliation and withdrawal outcomes.</p>
+    </article>
+    <article>
+      <h2>Reproduce from source</h2>
+      <p><a href="https://github.com/Hesamation/wbts" target="_blank" rel="noreferrer">Source repository (currently private) ↗</a> retains its historical WBTS URL. The README includes pinned toolchain instructions and the full test/export commands. The repository must be public before it can serve as a public hackathon submission.</p>
+      <p>From a repository checkout, the viewer needs only Python 3:</p>
+      <pre><code>python3 -m http.server 8765 --bind 127.0.0.1 --directory demo</code></pre>
+      <p>Open <code>http://127.0.0.1:8765/</code>. To independently check the committed records:</p>
+      <pre><code>python3 scripts/check-data-demo.py</code></pre>
+      <p>The contract release at <code>3c19289</code> passed 42 simulator tests, seven CLI tests, builds/lint and the six-case export check in <a href="https://github.com/Hesamation/wbts/actions/runs/43631842501" target="_blank" rel="noreferrer">GitHub CI (repository access required) ↗</a>. The viewer's name and guide were updated afterward; the underlying contract execution records are unchanged.</p>
+    </article>
+    <div class="guide-links"><a class="primary" href="./#buyer-disappears">Open the recorded deal →</a><a href="README.md">Viewer reproduction notes ↗</a></div>
+  </main>
+  <footer class="wrap"><span>FactSettle <span class="muted">/ Built at NEAR HACKATHON</span></span><span><a href="LICENSE">MIT license</a> · <a href="INFERPAY-LICENSE">InferPay license</a></span></footer>
+</body>
+</html>

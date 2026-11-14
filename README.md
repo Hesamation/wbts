@@ -1,16 +1,24 @@
-# Who Broke the Swarm?
+# FactSettle
 
-**Proof-backed settlement for agent data jobs on NEAR.** A specialist should not have
+**Proof-backed payments for agent data jobs on NEAR.** A specialist should not have
 to reveal a useful answer and then hope the buyer sends payment. A buyer should not
 pay for an invented or missing answer.
 
-WBTS escrows a job price against a seller-published dataset root and explicit fact
+FactSettle escrows a job price against a seller-published dataset root and explicit fact
 keys. The specialist accepts the terms. Each valid Merkle opening earns its agreed
 share directly; an authenticated empty slot or expired undelivered work refunds
 that share. Buyer approval is not required after acceptance. Every allocation is
 withdrawable credit, with a checked transfer callback.
 
 ## Judges: start here
+
+**[Try the hosted demo](https://factsettle.memorabletulip2.chatgpt.site)** ·
+[Two-minute judge guide](https://factsettle.memorabletulip2.chatgpt.site/guide.html) ·
+[Execution manifest](demo/evidence/manifest.json)
+
+Start with **Buyer won't approve**: the seller receives the agreed payment without
+another approval call. Use **Fund → Accept → Deliver → Withdraw** to jump through
+the recorded deal. Then try the altered-answer and partial-delivery cases.
 
 No wallet, API key, funding or npm install is needed to inspect the included runs.
 From the repository root, with Python 3:
@@ -34,6 +42,11 @@ Open **http://127.0.0.1:8765/**.
 
 The other cases show authenticated absence, an unaccepted offer and cancellation.
 [Viewer instructions](demo/README.md) explain replay versus re-execution.
+
+The new proof-backed contract's [release CI](https://github.com/Hesamation/wbts/actions/runs/43631842501)
+passed 42 simulator tests and seven CLI tests, builds/lint, and the six-case
+export check at `3c19289`. The viewer checks file hashes against the manifest;
+its editable proof check independently recomputes the Merkle root.
 
 **Evidence boundary:** these are recorded executions of the compiled contract in
 NEAR's pinned local simulator, with distinct signing accounts and constructed
@@ -64,7 +77,7 @@ including an exact remainder allocation.
 [InferPay's documented seller-first workflow](https://github.com/taejeekim/InferPay/tree/c7f773f144ff01092348185ed657dfe729fcec44#limits)
 verifies data proofs before a buyer-signed transfer and explicitly identifies
 proof-verifying escrow as unfinished. We inspected its payout and payment code.
-WBTS addresses that concrete integration gap with enforceable settlement.
+FactSettle addresses that concrete integration gap with enforceable settlement.
 
 A capable escrow can implement these rules; this is such an implementation. The
 contribution is a bounded, reproducible fact-proof settlement module, participant
@@ -160,12 +173,16 @@ nothing. [Contract and client guide](data-escrow/README.md).
 
 ## Project history and independence
 
+**FactSettle** is the current product name. The repository URL and internal WBTS
+identifiers are retained for continuity; they do not imply that the old swarm
+attribution mechanism is the current demo.
+
 The original optimistic T2 attribution contract and CLI remain under
 [`contract/`](contract/README.md) and [`cli/`](cli/README.md). They demonstrate
 bonded false-accusation defense, with an explicitly unsafe missed-defense outcome:
 false unchallenged claims can become final. The new `data-escrow/` contract is a
 fresh-state successor with eager proof checks and job-price settlement; it does
-not migrate prior stakes, state or deployments. [Historical handoff](START-HERE.md).
+not migrate prior stakes, state or deployments. [Historical handoff](WBTS-HISTORY.md).
 
 Another project by the same solo developer is **Where's the Rest?**, a NEAR-to-Base
 payout investigation tool. It is a separate codebase and product; no payout-reader
@@ -177,9 +194,9 @@ tests use pinned near-contract-sim; the client uses the libraries listed in
 `cli/Cargo.toml`. The sparse Merkle scheme, compatibility JS and public sample facts
 are adapted from Taejee Kim's MIT-licensed InferPay. See
 [third-party notices](THIRD_PARTY_NOTICES.md). The new contract, accounting,
-participant client, execution exporter and viewer are WBTS implementation work.
+participant client, execution exporter and viewer are project implementation work.
 
 ## License
 
-[MIT](LICENSE), with third-party notices retained. Public release, hosting and live
+[MIT](LICENSE), with third-party notices retained. Repository publication and live
 deployment are separate from the local evidence supplied here.

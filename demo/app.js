@@ -85,6 +85,22 @@ function renderCursor() {
     dot.textContent = i <= cursor ? steps[i].success ? '✓' : '×' : '·';
   }
   $('checks').textContent = cursor === steps.length - 1 ? '✓ Ledger conserved · withdrawals confirmed' : cursor < 0 ? 'No price has been deposited yet.' : '✓ Ledger conserved at this call';
+  const final = cursor === steps.length - 1;
+  const paid = BigInt(job?.paid ?? '0'), refunded = BigInt(job?.refunded ?? '0');
+  let outcome = 'The seller commits to a dataset before the buyer opens the job.';
+  if (job) {
+    outcome = job.accepted ? 'Terms accepted. Valid deliveries can earn payment.' : 'Price funded. The seller has not accepted yet.';
+    if (cursor >= 0 && !steps[cursor].success && steps[cursor].method === 'deliver') outcome = 'Altered proof rejected. No job payment allocated.';
+    else if (paid > 0n && refunded > 0n) outcome = final ? 'Seller paid for delivered data. The remaining share returned to the buyer.' : 'Delivered data earns credit. The remaining share is credited back to the buyer.';
+    else if (paid > 0n) outcome = final ? 'Seller paid. No buyer approval call.' : 'Valid proof accepted. Seller credit earned without buyer approval.';
+    else if (refunded > 0n) outcome = final ? 'Buyer refunded. No job payment earned by the seller.' : 'Unfulfilled job price credited back to the buyer.';
+  }
+  $('case-outcome').textContent = outcome;
+  for (const button of document.querySelectorAll('[data-stage]')) {
+    const index = steps.findLastIndex((step) => step.method === button.dataset.stage);
+    button.disabled = index < 0;
+    button.setAttribute('aria-pressed', String(index >= 0 && cursor === index));
+  }
 }
 
 function renderTimeline() {
@@ -180,6 +196,14 @@ async function loadCase(item) {
 
 $('previous').addEventListener('click', () => { stopPlayback(); cursor = Math.max(-1, cursor - 1); renderCursor(); });
 $('next').addEventListener('click', () => { stopPlayback(); cursor = Math.min(active.steps.length - 1, cursor + 1); renderCursor(); });
+for (const button of document.querySelectorAll('[data-stage]')) {
+  button.addEventListener('click', () => {
+    if (!active) return;
+    const index = active.steps.findLastIndex((step) => step.method === button.dataset.stage);
+    if (index < 0) return;
+    stopPlayback(); cursor = index; renderCursor();
+  });
+}
 $('play').addEventListener('click', () => {
   if (!active) return;
   if (timer !== null) { stopPlayback(); return; }
@@ -193,6 +217,10 @@ $('proof-choice').addEventListener('change', selectProof);
 $('verify').addEventListener('click', () => void checkProof());
 $('proof-value').addEventListener('keydown', (event) => { if (event.key === 'Enter') void checkProof(); });
 $('proof-value').addEventListener('input', () => { proofSequence++; $('proof-result').textContent = 'Value changed. Check the proof again.'; $('computed-root').textContent = '—'; $('proof-result').classList.remove('invalid'); });
+window.addEventListener('hashchange', () => {
+  const item = manifest?.cases.find((entry) => `#${entry.id}` === location.hash);
+  if (item && item.id !== active?.id) void loadCase(item);
+});
 
 try {
   const response = await fetch('evidence/manifest.json'); if (!response.ok) throw new Error(`HTTP ${response.status}`);
